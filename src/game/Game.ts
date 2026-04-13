@@ -9,6 +9,7 @@ import { Player } from './Player';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
 import { createTerrain, createWater, waterMaterial } from './terrain';
 import { populateEnvironment } from './environment';
+import { InstancedGrass } from './InstancedGrass';
 import skyUrl from '../assets/sky.png';
 
 export class Game {
@@ -16,6 +17,7 @@ export class Game {
   private renderer: THREE.WebGLRenderer;
   private input: InputManager;
   private player: Player;
+  private grass!: InstancedGrass;
   private tpCamera: ThirdPersonCamera;
   private skydome: THREE.Object3D | null = null;
   private composer!: EffectComposer;
@@ -46,7 +48,7 @@ export class Game {
     // --- Lighting System (Realistic multi-source standard) ---
     
     // 1. Sky ambient bounce fill
-    const ambientLight = new THREE.AmbientLight(0xc9d8f0, 0.4);
+    const ambientLight = new THREE.AmbientLight(0xc9d8f0, 1.0);
     this.scene.add(ambientLight);
 
     // 2. Primary mid-afternoon sun (warm)
@@ -67,7 +69,7 @@ export class Game {
     this.scene.add(sun);
 
     // 3. Secondary subtle cooler back-fill to illuminate shadowed faces naturally
-    const fillLight = new THREE.DirectionalLight(0xc9d8f0, 0.5);
+    const fillLight = new THREE.DirectionalLight(0xc9d8f0, 1.2);
     fillLight.position.set(-100, 50, -50);
     this.scene.add(fillLight);
 
@@ -77,6 +79,10 @@ export class Game {
 
     // --- Environment ---
     populateEnvironment(this.scene);
+
+    // --- High-Performance Instanced 3D Grass ---
+    this.grass = new InstancedGrass(80000);
+    this.scene.add(this.grass.mesh);
 
 
 
@@ -207,6 +213,11 @@ export class Game {
     // Animate the highly realistic water turbulence shader
     if (waterMaterial && waterMaterial.uniforms) {
       waterMaterial.uniforms.uTime.value = time / 1000.0;
+    }
+
+    // Animate the highly performant 3D Instanced Grass swaying in the wind
+    if (this.grass) {
+      this.grass.update(time / 1000.0);
     }
 
     this.composer.render();

@@ -115,6 +115,11 @@ export function getTerrainHeight(x: number, z: number): number {
 
   rawHeight -= lakeBasin * 10.0;
 
+  // Prevent small puddles: clamp terrain above water level (-1.9) everywhere except the main lake
+  if (lakeBasin < 0.01) {
+    rawHeight = Math.max(rawHeight, -1.5);
+  }
+
   // Keep spawn completely level and dry
   const distFromCenter = Math.sqrt(x * x + z * z);
   const spawnFlatten = THREE.MathUtils.smoothstep(distFromCenter, 0, 20);
@@ -161,8 +166,8 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   }
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
-  // ── Clean, straight UV coordinates (Vastly larger tiles as requested) ────
-  const TILE_REPEAT = 14; // Reduced repeat so each grass tile covers a much larger area
+  // ── Clean, straight UV coordinates ────
+  const TILE_REPEAT = 6; // Fewer repeats = bigger tiles = far less visible seams
 
   const uvAttr = geometry.attributes.uv as THREE.BufferAttribute;
   for (let i = 0; i < uvAttr.count; i++) {
@@ -183,64 +188,101 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   const material = new THREE.MeshStandardMaterial({ 
     map: grassTex, 
     vertexColors: true,
-    roughness: 0.85, // natural high-roughness grass surface
-    metalness: 0.1
+    roughness: 1.0,
+    metalness: 0.0
   });
 
-  // ── Multi-Scale Blending & Macro Variation via GPU Shader ────
-  // Breaks up texture repetition by sampling at different scales and applying a low-frequency noise overlay.
+  // ── Hex Tiling: eliminates grid seams by sampling in overlapping hexagonal cells ────
   material.onBeforeCompile = (shader) => {
-    // 1. Inject procedural noise functions at the top of the fragment shader
     shader.fragmentShader = `
-      float my_hash(vec2 p) {
-          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      // --- Hex tiling helpers ---
+      vec4 hex_hash4(vec2 p) {
+          return fract(sin(vec4(
+              dot(p, vec2(127.1, 311.7)),
+              dot(p, vec2(269.5, 183.3)),
+              dot(p, vec2(419.2, 371.9)),
+              dot(p, vec2(523.7, 247.1))
+          )) * 43758.5453);
       }
 
-      float my_noise(vec2 p) {
+      // Hex grid cell decomposition: returns barycentric-like weights + cell IDs
+      void hexTile(vec2 uv, out vec2 uv1, out vec2 uv2, out vec2 uv3, out float w1, out float w2, out float w3) {
+          vec2 q = vec2(uv.x * 2.0 * 0.5773503, uv.y + uv.x * 0.5773503);
+          vec2 qi = floor(q);
+          vec2 qf = fract(q);
+
+          float triType = step(qf.x + qf.y, 1.0);
+
+          // Three vertices of the containing triangle
+          vec2 v1i = qi;
+          vec2 v2i = qi + vec2(1.0, 0.0);
+          vec2 v3i = qi + vec2(0.0, 1.0);
+          if (triType < 0.5) {
+              v1i = qi + vec2(1.0, 1.0);
+          }
+
+          // Random UV offsets per hex cell
+          vec4 h1 = hex_hash4(v1i);
+          vec4 h2 = hex_hash4(v2i);
+          vec4 h3 = hex_hash4(v3i);
+
+          // Rotated + offset UVs per cell
+          float rot1 = h1.z * 6.2831;
+          float rot2 = h2.z * 6.2831;
+          float rot3 = h3.z * 6.2831;
+          uv1 = mat2(cos(rot1), -sin(rot1), sin(rot1), cos(rot1)) * uv + h1.xy;
+          uv2 = mat2(cos(rot2), -sin(rot2), sin(rot2), cos(rot2)) * uv + h2.xy;
+          uv3 = mat2(cos(rot3), -sin(rot3), sin(rot3), cos(rot3)) * uv + h3.xy;
+
+          // Barycentric weights from triangle position
+          if (triType > 0.5) {
+              w1 = 1.0 - qf.x - qf.y;
+              w2 = qf.x;
+              w3 = qf.y;
+          } else {
+              w1 = qf.x + qf.y - 1.0;
+              w2 = 1.0 - qf.y;
+              w3 = 1.0 - qf.x;
+          }
+
+          // Smooth the weights to avoid harsh transitions
+          w1 = smoothstep(0.0, 1.0, w1);
+          w2 = smoothstep(0.0, 1.0, w2);
+          w3 = smoothstep(0.0, 1.0, w3);
+          float wSum = w1 + w2 + w3;
+          w1 /= wSum;
+          w2 /= wSum;
+          w3 /= wSum;
+      }
+
+      float perlin_hash_f(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+      float perlin_noise(vec2 p) {
           vec2 i = floor(p);
           vec2 f = fract(p);
           vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(mix(my_hash(i + vec2(0.0, 0.0)), 
-                         my_hash(i + vec2(1.0, 0.0)), u.x),
-                     mix(my_hash(i + vec2(0.0, 1.0)), 
-                         my_hash(i + vec2(1.0, 1.0)), u.x), u.y);
+          return mix(mix(perlin_hash_f(i), perlin_hash_f(i + vec2(1.0, 0.0)), u.x),
+                     mix(perlin_hash_f(i + vec2(0.0, 1.0)), perlin_hash_f(i + vec2(1.0, 1.0)), u.x), u.y);
       }
     ` + shader.fragmentShader;
 
-    // 2. Replace the standard texture sampling with our advanced blending technique
     shader.fragmentShader = shader.fragmentShader.replace(
       'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
       `
-      // Sample 1: Large scale to cover big areas
-      vec4 c1 = texture2D(map, vMapUv * 0.36);
-      
-      // Sample 2: Medium scale (standard resolution)
-      vec4 c2 = texture2D(map, vMapUv * 1.0);
-      
-      // Sample 3: Small scale for fine details
-      vec4 c3 = texture2D(map, vMapUv * 2.21);
+      // Hex tiling: sample texture in 3 overlapping hex cells with random rotation/offset per cell
+      vec2 hexUv1, hexUv2, hexUv3;
+      float hw1, hw2, hw3;
+      hexTile(vMapUv * 0.7, hexUv1, hexUv2, hexUv3, hw1, hw2, hw3);
 
-      // Sample 4: Rotated/offset lookup to break any remaining straight repeat lines
-      vec2 rotatedUv = vec2(
-        vMapUv.y * 0.82 + 0.17,
-        -vMapUv.x * 0.82 + 0.11
-      );
-      vec4 c4 = texture2D(map, rotatedUv);
+      vec4 sampledDiffuseColor =
+          texture2D(map, hexUv1) * hw1 +
+          texture2D(map, hexUv2) * hw2 +
+          texture2D(map, hexUv3) * hw3;
 
-      // Blend layers using mismatched frequencies to destroy the grid pattern
-      vec4 blendedGrass = c1 * 0.32 + c2 * 0.33 + c3 * 0.2 + c4 * 0.15;
-
-      // Create a macro variation using low-frequency noise across the entire terrain
-      // vMapUv is scaled by 14.0, so dividing by 14.0 gives [0,1] over the 300x300 terrain
-      vec2 terrainUV = vMapUv / 14.0;
-      
-      // Layered noise for organic, non-uniform shading
-      float n = my_noise(terrainUV * 3.0) * 0.5 + my_noise(terrainUV * 6.0) * 0.25 + 0.25;
-      
-      // Map the noise to a brightness multiplier (creates subtle dry/lush patches)
-      float macro = mix(0.65, 1.35, n);
-
-      vec4 sampledDiffuseColor = blendedGrass * vec4(vec3(macro), 1.0);
+      // Subtle macro brightness variation
+      float macro = mix(0.8, 1.2, perlin_noise(vMapUv * 0.04 + vec2(5.3, 7.1)));
+      sampledDiffuseColor.rgb *= macro;
       `
     );
   };

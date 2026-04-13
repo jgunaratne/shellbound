@@ -13,6 +13,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import pineTreeUrl from '../assets/pine_tree.glb';
 import treeUrl from '../assets/tree.glb';
 import rockUrl from '../assets/rock.glb';
+import mountainUrl from '../assets/mountains.glb';
 
 // Simple 2D circular collision registry to prevent clipping through static objects
 export const colliders: { x: number; z: number; radius: number }[] = [];
@@ -27,13 +28,15 @@ export function populateEnvironment(scene: THREE.Scene) {
   Promise.all([
     new Promise<any>((resolve, reject) => loader.load(pineTreeUrl, resolve, undefined, reject)),
     new Promise<any>((resolve, reject) => loader.load(treeUrl, resolve, undefined, reject)),
-    new Promise<any>((resolve, reject) => loader.load(rockUrl, resolve, undefined, reject))
-  ]).then(([pineGltf, normalGltf, rockGltf]) => {
+    new Promise<any>((resolve, reject) => loader.load(rockUrl, resolve, undefined, reject)),
+    new Promise<any>((resolve, reject) => loader.load(mountainUrl, resolve, undefined, reject))
+  ]).then(([pineGltf, normalGltf, rockGltf, mountainGltf]) => {
     const treeModels = [pineGltf.scene, normalGltf.scene];
     const baseRock = rockGltf.scene;
+    const baseMountain = mountainGltf.scene;
 
     // Enable shadows on the base models
-    [...treeModels, baseRock].forEach(model => {
+    [...treeModels, baseRock, baseMountain].forEach(model => {
       model.traverse((child: any) => {
         if (child.isMesh) {
           child.castShadow = true;
@@ -67,8 +70,9 @@ export function populateEnvironment(scene: THREE.Scene) {
       const x = (rand() - 0.5) * SPREAD * 2;
       const z = (rand() - 0.5) * SPREAD * 2;
       
+      // Skip near spawn so camera isn't blocked on load
       const dist = Math.sqrt(x * x + z * z);
-      if (dist < 10) continue;
+      if (dist < 60) continue;
       
       const terrainY = getTerrainHeight(x, z);
       if (terrainY < -1.9) continue; // Do not spawn trees in lakes
@@ -76,7 +80,9 @@ export function populateEnvironment(scene: THREE.Scene) {
       const baseTree = treeModels[Math.floor(rand() * treeModels.length)];
       const tree = baseTree.clone();
       
-      const uniformScale = 0.6 + rand() * 1.4;
+      // Most trees are medium, but some grow very tall for a forest canopy feel
+      let uniformScale = 0.6 + rand() * 1.4;
+      if (rand() < 0.2) uniformScale = 2.5 + rand() * 2.0; // 20% chance of towering tree
       
       const y = terrainY - 1.8 * uniformScale;
       tree.position.set(x, y, z);
@@ -87,7 +93,28 @@ export function populateEnvironment(scene: THREE.Scene) {
       colliders.push({ x, z, radius: 0.4 * uniformScale });
       scene.add(tree);
     }
-    console.log('Trees and rocks loaded and scattered');
+
+
+
+    // Place towering mountains in a ring around the terrain edge
+    const mountainAngles = [0, 0.7, 1.4, 2.1, 2.8, 3.5, 4.2, 4.9, 5.6];
+    for (const angle of mountainAngles) {
+      const mountain = baseMountain.clone();
+      const dist = 200 + rand() * 50;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+
+      const scale = 100 + rand() * 100;
+      mountain.position.set(x, -5, z);
+      mountain.scale.setScalar(scale);
+      mountain.rotation.y = rand() * Math.PI * 2;
+      mountain.traverse((child: any) => {
+        if (child.isMesh) child.frustumCulled = false;
+      });
+      scene.add(mountain);
+    }
+
+    console.log('Trees, rocks, and mountains loaded and scattered');
   }).catch(err => {
     console.error('Failed to load GLB assets:', err);
   });
