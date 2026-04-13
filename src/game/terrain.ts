@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import grassUrl from '../assets/grass_seamless.png';
+import grassUrl from '../assets/grass.png';
 
 /* ─── Classic 2D Perlin noise ─────────────────────────────────────── */
 

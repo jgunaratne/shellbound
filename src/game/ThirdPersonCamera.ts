@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import type { InputManager } from './InputManager';
+import { getTerrainHeight } from './terrain';
 
 const DISTANCE = 7;
-const HEIGHT_OFFSET = 3;
-const PITCH_MIN = -0.1;
+const HEIGHT_OFFSET = 2.0;
+const PITCH_MIN = -0.4;
 const PITCH_MAX = 0.9;
 const MOUSE_SENSITIVITY = 0.003;
 const LERP_SPEED = 8;
@@ -11,7 +12,7 @@ const LERP_SPEED = 8;
 export class ThirdPersonCamera {
   readonly camera: THREE.PerspectiveCamera;
   yaw = Math.PI; // start behind player
-  pitch = 0.35;
+  pitch = 0.1;
 
   constructor() {
     this.camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 800);
@@ -31,7 +32,20 @@ export class ThirdPersonCamera {
     );
 
     const desiredPos = target.clone().add(offset);
+    
+    // Keep desired position above terrain
+    const terrainYAtDesired = getTerrainHeight(desiredPos.x, desiredPos.z);
+    if (desiredPos.y < terrainYAtDesired + 0.5) {
+      desiredPos.y = terrainYAtDesired + 0.5;
+    }
+
     this.camera.position.lerp(desiredPos, LERP_SPEED * dt);
+
+    // Enforce immediate clamp on final lerped position
+    const actualTerrainY = getTerrainHeight(this.camera.position.x, this.camera.position.z);
+    if (this.camera.position.y < actualTerrainY + 0.5) {
+      this.camera.position.y = actualTerrainY + 0.5;
+    }
 
     const lookAt = target.clone().add(new THREE.Vector3(0, 1.0, 0));
     this.camera.lookAt(lookAt);

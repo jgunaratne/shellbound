@@ -103,8 +103,8 @@ export class Game {
 
     this.bokehPass = new BokehPass(this.scene, this.tpCamera.camera, {
       focus: 7.0,       // Focus precisely centered on the player
-      aperture: 0.0002, // Extremely tight aperture for a deep, razor-sharp foreground
-      maxblur: 0.01     // Controlled, beautiful soft blur for distant scenery
+      aperture: 0.0001, // Tighter aperture for a significantly sharper foreground
+      maxblur: 0.004    // Reduced maximum blur to keep the background much clearer
     });
     this.composer.addPass(this.bokehPass);
 
@@ -125,7 +125,7 @@ export class Game {
       texture.repeat.set(3, 1);
 
       const skyRadius = 350;
-      const skyHeight = 350;
+      const skyHeight = 800;
       // Open-ended cylinder — UVs map linearly: U around, V bottom-to-top
       const geo = new THREE.CylinderGeometry(
         skyRadius, skyRadius, skyHeight, 64, 1, true
@@ -138,12 +138,11 @@ export class Game {
       });
 
       // ── Cinematic Atmospheric Sky Blur via GPU Shader ────
-      // Softens the crisp panoramic image natively on the graphics card to create a beautiful, dreamy horizon background
       mat.onBeforeCompile = (shader) => {
         shader.fragmentShader = shader.fragmentShader.replace(
           'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
           `
-          float blurAmt = 0.008; // beautiful soft blur radius to take the digital sharpness off the clouds
+          float blurAmt = 0.008;
           
           vec4 sampledDiffuseColor = (
             texture2D(map, vMapUv) +
@@ -158,16 +157,14 @@ export class Game {
         );
       };
 
-      // Group holds the cylinder + top cap together
       const skyGroup = new THREE.Group();
-
       const cylinder = new THREE.Mesh(geo, mat);
       skyGroup.add(cylinder);
 
-      // Disc cap to close the top — color matched to the sky image upper edge
+      // Disc cap to close the top — matched to the blue sky color
       const capGeo = new THREE.CircleGeometry(skyRadius, 64);
       const capMat = new THREE.MeshBasicMaterial({
-        color: 0xc9a8b8, // soft pink matching cloud edge
+        color: 0xc9d8f0, // clear blue sky color
         side: THREE.BackSide,
         depthWrite: false,
         fog: false,
@@ -177,9 +174,8 @@ export class Game {
       cap.position.y = skyHeight / 2;
       skyGroup.add(cap);
 
-      // Shift the whole dome up so camera sits in the lower portion,
-      // making the clouds visible above the horizon
-      skyGroup.position.y = skyHeight * 0.15;
+      // Shift dome up so clouds sit nicely near the horizon
+      skyGroup.position.y = 300;
 
       skyGroup.renderOrder = -1;
       this.skydome = skyGroup;
