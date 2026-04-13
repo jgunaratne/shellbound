@@ -257,6 +257,7 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   mergedGeometry.computeVertexNormals();
 
   const mesh = new THREE.Mesh(mergedGeometry, material);
+  mesh.castShadow = false;
   mesh.receiveShadow = true;
   mesh.name = 'terrain';
   scene.add(mesh);
