@@ -47,45 +47,44 @@ export function populateEnvironment(scene: THREE.Scene) {
       const x = (rand() - 0.5) * SPREAD * 2;
       const z = (rand() - 0.5) * SPREAD * 2;
       
+      const terrainY = getTerrainHeight(x, z);
+      if (terrainY < -1.9) continue; // Do not spawn rocks in lakes
+      
       const rock = baseRock.clone();
       const scale = 0.4 + rand() * 1.2;
       
-      // Sink slightly into terrain to avoid floating edges on slopes
-      rock.position.set(x, getTerrainHeight(x, z) - scale * 0.1, z);
+      // Embed deeply into the terrain to ensure a perfectly solid, grounded appearance on all slopes
+      rock.position.set(x, terrainY - scale * 0.8, z);
       rock.scale.setScalar(scale);
       rock.rotation.y = rand() * Math.PI * 2;
       
-      // Register rock collision boundary
       colliders.push({ x, z, radius: scale * 0.8 });
-      
       scene.add(rock);
     }
 
-    // Scatter 300 clones across the terrain for a much denser forest
+    // Scatter clones across the terrain for a beautiful dry forest
     for (let i = 0; i < 300; i++) {
       const x = (rand() - 0.5) * SPREAD * 2;
       const z = (rand() - 0.5) * SPREAD * 2;
+      
       const dist = Math.sqrt(x * x + z * z);
-      if (dist < 10) continue; // keep spawn area clear
+      if (dist < 10) continue;
+      
+      const terrainY = getTerrainHeight(x, z);
+      if (terrainY < -1.9) continue; // Do not spawn trees in lakes
 
-      // Randomly pick one of the tree models
       const baseTree = treeModels[Math.floor(rand() * treeModels.length)];
       const tree = baseTree.clone();
       
-      // Preserve perfect geometric aspect ratio using uniform scaling for natural variety
-      const uniformScale = 0.6 + rand() * 1.4; // 0.6x to 2.0x uniform size
+      const uniformScale = 0.6 + rand() * 1.4;
       
-      // Submerge the base deeply into the ground so no part of the flat bottom is visible on sloped terrain
-      const y = getTerrainHeight(x, z) - 1.8 * uniformScale;
+      const y = terrainY - 1.8 * uniformScale;
       tree.position.set(x, y, z);
       tree.scale.setScalar(uniformScale);
       
-      // Natural trunk rotation
       tree.rotation.y = rand() * Math.PI * 2;
       
-      // Register solid trunk proportional to its uniform scale
       colliders.push({ x, z, radius: 0.4 * uniformScale });
-
       scene.add(tree);
     }
     console.log('Trees and rocks loaded and scattered');

@@ -105,22 +105,22 @@ export function getTerrainHeight(x: number, z: number): number {
   const OFFSET_Z = 149.3;
 
   // Primary rolling hills
+  // Generate massive, natural Perlin-based rolling hills and deep valleys
   const base = fbm(x * SCALE + OFFSET_X, z * SCALE + OFFSET_Z, 5, 2.0, 0.5);
+  let rawHeight = base * HEIGHT * 0.95;
 
-  // Secondary layer: ridged noise for subtle sharp creases
-  const ridge = 1.0 - Math.abs(perlin2(
-    (x * SCALE * 0.8) + 200,
-    (z * SCALE * 0.8) + 200
-  ));
-  const ridgeContrib = ridge * ridge * 0.25; // squared for sharper peaks
+  // Carve exactly ONE beautiful, dedicated mid-sized lake right in front of the player's starting view
+  const distFromSingleLake = Math.sqrt(x * x + (z + 60) * (z + 60));
+  const lakeBasin = 1.0 - THREE.MathUtils.smoothstep(distFromSingleLake, 0, 45);
 
-  // Flatten area near spawn so the player starts on gentle ground
+  rawHeight -= lakeBasin * 10.0;
+
+  // Keep spawn completely level and dry
   const distFromCenter = Math.sqrt(x * x + z * z);
   const spawnFlatten = THREE.MathUtils.smoothstep(distFromCenter, 0, 20);
+  const spawnElevation = 4.5 * (1.0 - spawnFlatten);
 
-  const rawHeight = (base + ridgeContrib) * HEIGHT * 0.5;
-
-  return rawHeight * spawnFlatten;
+  return rawHeight * spawnFlatten + spawnElevation;
 }
 
 
@@ -268,13 +268,15 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
 export function createWater(scene: THREE.Scene) {
   const geo = new THREE.PlaneGeometry(300, 300);
   geo.rotateX(-Math.PI / 2);
-  const mat = new THREE.MeshLambertMaterial({
-    color: 0x2255aa,
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x0066cc, // beautiful, classic natural blue
+    roughness: 0.05, // slightly softened specular highlight
+    metalness: 0.9,
     transparent: true,
-    opacity: 0.75,
+    opacity: 0.75,   // substantially opaque to give it beautiful volume and color presence
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = -3.5; // sit below most terrain
+  mesh.position.y = -2.0; // fills only the primary basin, leaving all other valleys completely dry
   mesh.name = 'water';
   scene.add(mesh);
 }
