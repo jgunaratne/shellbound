@@ -264,19 +264,66 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   return mesh;
 }
 
-/** Simple edge-water plane */
+export let waterMaterial: THREE.ShaderMaterial | null = null;
+
+/** Beautiful procedural turbulence water plane */
 export function createWater(scene: THREE.Scene) {
   const geo = new THREE.PlaneGeometry(300, 300);
   geo.rotateX(-Math.PI / 2);
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x0066cc, // beautiful, classic natural blue
-    roughness: 0.05, // slightly softened specular highlight
-    metalness: 0.9,
-    transparent: true,
-    opacity: 0.75,   // substantially opaque to give it beautiful volume and color presence
+  
+  waterMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0.0 }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      #define TAU 6.28318530718
+      #define MAX_ITER 5
+
+      uniform float uTime;
+      varying vec2 vUv;
+
+      void main() {
+        // Slow down the procedural caustics for a majestic, relaxing natural pace
+        float time = uTime * 0.1 + 23.0;
+        vec2 uv = vUv * 8.0;
+        
+        vec2 p = mod(uv * TAU, TAU) - 250.0;
+        vec2 i = vec2(p);
+        float c = 1.0;
+        float inten = 0.005;
+
+        for (int n = 0; n < MAX_ITER; n++) {
+          float t = time * (1.0 - (3.5 / float(n + 1)));
+          i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
+          c += 1.0 / length(vec2(p.x / (sin(i.x + t) / inten), p.y / (cos(i.y + t) / inten)));
+        }
+
+        c /= float(MAX_ITER);
+        c = 1.17 - pow(c, 1.4);
+        // Pure near-black deep oceanic base
+        vec3 baseBlue = vec3(0.0, 0.01, 0.05);
+        
+        // Very subtle, deep blue caustics with virtually zero white brightness
+        vec3 causticHighlight = vec3(0.03, 0.1, 0.2) * pow(abs(c), 6.0);
+        
+        vec3 finalColor = baseBlue + causticHighlight;
+
+        // Render with perfectly balanced transparency (0.65)
+        gl_FragColor = vec4(finalColor, 0.65);
+      }
+    `,
+    transparent: true
   });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = -2.0; // fills only the primary basin, leaving all other valleys completely dry
+
+  const mesh = new THREE.Mesh(geo, waterMaterial);
+  mesh.position.y = -2.0;
   mesh.name = 'water';
   scene.add(mesh);
 }

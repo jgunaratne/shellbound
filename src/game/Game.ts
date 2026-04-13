@@ -7,7 +7,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { InputManager } from './InputManager';
 import { Player } from './Player';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
-import { createTerrain, createWater } from './terrain';
+import { createTerrain, createWater, waterMaterial } from './terrain';
 import { populateEnvironment } from './environment';
 import skyUrl from '../assets/sky.png';
 
@@ -202,6 +202,11 @@ export class Game {
     if (this.skydome) {
       const camPos = this.tpCamera.camera.position;
       this.skydome.position.set(camPos.x, 0, camPos.z);
+    }
+
+    // Animate the highly realistic water turbulence shader
+    if (waterMaterial && waterMaterial.uniforms) {
+      waterMaterial.uniforms.uTime.value = time / 1000.0;
     }
 
     this.composer.render();
