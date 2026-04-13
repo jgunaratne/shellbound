@@ -106,8 +106,21 @@ export class Player {
       moveX /= len;
       moveZ /= len;
 
-      this.group.position.x += moveX * SPEED * dt;
-      this.group.position.z += moveZ * SPEED * dt;
+      const nextX = this.group.position.x + moveX * SPEED * dt;
+      const nextZ = this.group.position.z + moveZ * SPEED * dt;
+
+      // Strict, impenetrable shoreline block: completely prevent walking into the lake (water level -2.0)
+      if (getTerrainHeight(nextX, nextZ) > -1.9) {
+        this.group.position.x = nextX;
+        this.group.position.z = nextZ;
+      } else {
+        // Retain previous position strictly if moving directly into water
+        if (getTerrainHeight(nextX, this.group.position.z) > -1.9) {
+          this.group.position.x = nextX;
+        } else if (getTerrainHeight(this.group.position.x, nextZ) > -1.9) {
+          this.group.position.z = nextZ;
+        }
+      }
 
       // Enforce physical object boundaries (Circle-Circle collision resolution)
       for (const c of colliders) {
