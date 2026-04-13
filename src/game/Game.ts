@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { CameraHelper } from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
@@ -54,20 +53,18 @@ export class Game {
     const sun = new THREE.DirectionalLight(0xfff5e0, 2.8);
     sun.position.set(100, 150, 50);
     sun.castShadow = true;
-    sun.shadow.bias = -0.001;
-    sun.shadow.normalBias = 0.05;
-    const WORLD_HALF_SIZE = 300 / 2;
-    sun.shadow.camera.left = -WORLD_HALF_SIZE;
-    sun.shadow.camera.right = WORLD_HALF_SIZE;
-    sun.shadow.camera.top = WORLD_HALF_SIZE;
-    sun.shadow.camera.bottom = -WORLD_HALF_SIZE;
-    sun.shadow.camera.near = 0.1;
-    sun.shadow.camera.far = 200;
+    sun.shadow.mapSize.set(2048, 2048);
+    const halfWorld = 150; // covers the full 300x300 ground area tightly
+    sun.shadow.camera.left = -halfWorld;
+    sun.shadow.camera.right = halfWorld;
+    sun.shadow.camera.top = halfWorld;
+    sun.shadow.camera.bottom = -halfWorld;
+    sun.shadow.camera.near = 0.5;
+    sun.shadow.camera.far = 500;
+    sun.shadow.bias = -0.0005;
+    sun.shadow.normalBias = 0.02;
     sun.shadow.camera.updateProjectionMatrix();
-    sun.shadow.mapSize.width = 4096;
-    sun.shadow.mapSize.height = 4096;
     this.scene.add(sun);
-    this.scene.add(new CameraHelper(sun.shadow.camera));
 
     // 3. Secondary subtle cooler back-fill to illuminate shadowed faces naturally
     const fillLight = new THREE.DirectionalLight(0xc9d8f0, 0.5);
