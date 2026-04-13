@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import grassUrl from '../assets/grass.png';
+import grassUrl from '../assets/grass_seamless.png';
 
 /* ─── Classic 2D Perlin noise ─────────────────────────────────────── */
 
@@ -220,8 +220,15 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
       // Sample 3: Small scale for fine details
       vec4 c3 = texture2D(map, vMapUv * 2.21);
 
+      // Sample 4: Rotated/offset lookup to break any remaining straight repeat lines
+      vec2 rotatedUv = vec2(
+        vMapUv.y * 0.82 + 0.17,
+        -vMapUv.x * 0.82 + 0.11
+      );
+      vec4 c4 = texture2D(map, rotatedUv);
+
       // Blend layers using mismatched frequencies to destroy the grid pattern
-      vec4 blendedGrass = c1 * 0.4 + c2 * 0.4 + c3 * 0.2;
+      vec4 blendedGrass = c1 * 0.32 + c2 * 0.33 + c3 * 0.2 + c4 * 0.15;
 
       // Create a macro variation using low-frequency noise across the entire terrain
       // vMapUv is scaled by 14.0, so dividing by 14.0 gives [0,1] over the 300x300 terrain
