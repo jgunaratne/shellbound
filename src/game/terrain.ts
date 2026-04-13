@@ -283,40 +283,70 @@ export function createWater(scene: THREE.Scene) {
       }
     `,
     fragmentShader: `
-      #define TAU 6.28318530718
-      #define MAX_ITER 5
-
       uniform float uTime;
       varying vec2 vUv;
 
+      float random(float x) {
+          return fract(sin(x) * 10000.0);
+      }
+
+      float noise(vec2 p) {
+          return random(p.x + p.y * 10000.0);
+      }
+
+      vec2 sw(vec2 p) { return vec2(floor(p.x), floor(p.y)); }
+      vec2 se(vec2 p) { return vec2(ceil(p.x), floor(p.y)); }
+      vec2 nw(vec2 p) { return vec2(floor(p.x), ceil(p.y)); }
+      vec2 ne(vec2 p) { return vec2(ceil(p.x), ceil(p.y)); }
+
+      float smoothNoise(vec2 p) {
+          vec2 interp = smoothstep(0.0, 1.0, fract(p));
+          float s = mix(noise(sw(p)), noise(se(p)), interp.x);
+          float n = mix(noise(nw(p)), noise(ne(p)), interp.x);
+          return mix(s, n, interp.y);
+      }
+
+      float fractalNoise(vec2 p) {
+          float x = 0.0;
+          x += smoothNoise(p      );
+          x += smoothNoise(p * 2.0) / 2.0;
+          x += smoothNoise(p * 4.0) / 4.0;
+          x += smoothNoise(p * 8.0) / 8.0;
+          x += smoothNoise(p * 16.0) / 16.0;
+          x /= 1.0 + 1.0/2.0 + 1.0/4.0 + 1.0/8.0 + 1.0/16.0;
+          return x;
+      }
+
+      float movingNoise(vec2 p) {
+          float slowTime = uTime * 0.15;
+          float x = fractalNoise(p + slowTime);
+          float y = fractalNoise(p - slowTime);
+          return fractalNoise(p + vec2(x, y));   
+      }
+
+      float nestedNoise(vec2 p) {
+          float x = movingNoise(p);
+          float y = movingNoise(p + 100.0);
+          return movingNoise(p + vec2(x, y));
+      }
+
       void main() {
-        // Slow down the procedural caustics for a majestic, relaxing natural pace
-        float time = uTime * 0.1 + 23.0;
-        vec2 uv = vUv * 8.0;
-        
-        vec2 p = mod(uv * TAU, TAU) - 250.0;
-        vec2 i = vec2(p);
-        float c = 1.0;
-        float inten = 0.005;
-
-        for (int n = 0; n < MAX_ITER; n++) {
-          float t = time * (1.0 - (3.5 / float(n + 1)));
-          i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
-          c += 1.0 / length(vec2(p.x / (sin(i.x + t) / inten), p.y / (cos(i.y + t) / inten)));
-        }
-
-        c /= float(MAX_ITER);
-        c = 1.17 - pow(c, 1.4);
-        // Pure near-black deep oceanic base
-        vec3 baseBlue = vec3(0.0, 0.01, 0.05);
-        
-        // Very subtle, deep blue caustics with virtually zero white brightness
-        vec3 causticHighlight = vec3(0.03, 0.1, 0.2) * pow(abs(c), 6.0);
-        
-        vec3 finalColor = baseBlue + causticHighlight;
-
-        // Render with perfectly balanced transparency (0.65)
-        gl_FragColor = vec4(finalColor, 0.65);
+          vec2 uv = vUv * 12.0;
+          float n = nestedNoise(uv);
+          
+          // Extremely dark near-black deep-sea teal base
+          vec3 baseBlue = vec3(0.0, 0.01, 0.01);
+          
+          // Highly subtle deep emerald caustics with absolutely zero white highlights
+          vec3 highlightBlue = vec3(0.01, 0.08, 0.08);
+          
+          // Apply a beautiful power curve so the swirling pattern is visible but deeply atmospheric
+          float sharpNoise = pow(n, 2.5);
+          
+          vec3 finalColor = mix(baseBlue, highlightBlue, sharpNoise);
+          
+          // Render with highly dense opacity (0.85) for a beautifully rich, substantial liquid presence
+          gl_FragColor = vec4(finalColor, 0.85);
       }
     `,
     transparent: true

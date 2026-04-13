@@ -53,8 +53,8 @@ export function populateEnvironment(scene: THREE.Scene) {
       const rock = baseRock.clone();
       const scale = 0.4 + rand() * 1.2;
       
-      // Embed deeply into the terrain to ensure a perfectly solid, grounded appearance on all slopes
-      rock.position.set(x, terrainY - scale * 0.8, z);
+      // Embed very deeply into the terrain to guarantee absolutely zero floating gaps on steep slopes
+      rock.position.set(x, terrainY - scale * 1.8, z);
       rock.scale.setScalar(scale);
       rock.rotation.y = rand() * Math.PI * 2;
       
