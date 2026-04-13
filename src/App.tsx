@@ -30,13 +30,10 @@ export default function App() {
       <canvas ref={canvasRef} style={{ display: 'block', width: '100vw', height: '100vh' }} />
 
       <div className="hud">
-        <h1>OPEN WORLD</h1>
         <p>WASD — Move</p>
         <p>Mouse — Look {locked ? '(locked)' : ''}</p>
         {!locked && <p style={{ color: '#ffdd88', marginTop: 6 }}>Click to capture mouse</p>}
       </div>
-
-      <div className="crosshair" />
     </>
   );
 }

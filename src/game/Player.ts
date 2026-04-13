@@ -8,7 +8,7 @@ import turtleUrl from '../assets/turtle_walking.glb';
 const SPEED = 8;
 const TURN_SPEED = 5;
 const GRAVITY_SNAP = 12; // how fast player snaps to terrain height
-const PLAYER_RADIUS = 0.6; // Physical footprint of the turtle character
+const PLAYER_RADIUS = 2.0; // Increased footprint to prevent any clipping through rocks and trees
 
 export class Player {
   readonly group: THREE.Group;
