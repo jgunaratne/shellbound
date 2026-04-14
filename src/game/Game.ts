@@ -109,7 +109,9 @@ export class Game {
   private lowPerfElapsedMs = 0;
   private recoveryElapsedMs = 0;
   private skydome: THREE.Group | null = null;
-  private skyMaterial: THREE.MeshBasicMaterial | null = null;
+  private skyMaterialA: THREE.MeshBasicMaterial | null = null;
+  private skyMaterialB: THREE.MeshBasicMaterial | null = null;
+  private activeSkyLayer: 0 | 1 = 0;
   private skyCapMaterial: THREE.MeshBasicMaterial | null = null;
   private animId = 0;
   private lastTime = 0;
@@ -294,12 +296,22 @@ export class Game {
   private createSkydome(url: string) {
     this.loadSkyTexture(url, (texture) => {
       const skyGroup = new THREE.Group();
-      const skyMaterial = this.createSkyMaterial(texture);
-      const skyCylinder = new THREE.Mesh(
-        new THREE.CylinderGeometry(SKY_RADIUS, SKY_RADIUS, SKY_HEIGHT, 64, 1, true),
-        skyMaterial,
-      );
-      skyGroup.add(skyCylinder);
+
+      const skyMaterialA = this.createSkyMaterial(texture);
+      skyMaterialA.transparent = true;
+      skyMaterialA.opacity = 1.0;
+
+      const skyMaterialB = this.createSkyMaterial(texture);
+      skyMaterialB.transparent = true;
+      skyMaterialB.opacity = 0.0;
+
+      const geo = new THREE.CylinderGeometry(SKY_RADIUS, SKY_RADIUS, SKY_HEIGHT, 64, 1, true);
+      const skyCylinderA = new THREE.Mesh(geo, skyMaterialA);
+      const skyCylinderB = new THREE.Mesh(geo, skyMaterialB);
+      skyCylinderB.scale.setScalar(0.998); // offset slightly to stop Z-fighting
+
+      skyGroup.add(skyCylinderA);
+      skyGroup.add(skyCylinderB);
 
       const skyCapMaterial = new THREE.MeshBasicMaterial({
         color: FOG_COLOR,
@@ -315,7 +327,8 @@ export class Game {
       skyGroup.position.y = 300;
       skyGroup.renderOrder = -1;
 
-      this.skyMaterial = skyMaterial;
+      this.skyMaterialA = skyMaterialA;
+      this.skyMaterialB = skyMaterialB;
       this.skyCapMaterial = skyCapMaterial;
       this.skydome = skyGroup;
       this.scene.add(skyGroup);
@@ -431,10 +444,21 @@ export class Game {
     const preset = PRESETS[presetId];
 
     this.loadSkyTexture(preset.skyUrl, (texture) => {
-      if (!this.skyMaterial) return;
-      this.skyMaterial.map?.dispose();
-      this.skyMaterial.map = texture;
-      this.skyMaterial.needsUpdate = true;
+      if (!this.skyMaterialA || !this.skyMaterialB) return;
+
+      if (instant) {
+        this.skyMaterialA.map = texture;
+        this.skyMaterialA.opacity = 1.0;
+        this.skyMaterialA.needsUpdate = true;
+        this.skyMaterialB.opacity = 0.0;
+        this.activeSkyLayer = 0;
+      } else {
+        // Fade to alternate layer
+        const nextLayer = this.activeSkyLayer === 0 ? this.skyMaterialB : this.skyMaterialA;
+        nextLayer.map = texture;
+        nextLayer.needsUpdate = true;
+        this.activeSkyLayer = this.activeSkyLayer === 0 ? 1 : 0;
+      }
     });
 
     if (instant) {
@@ -486,6 +510,17 @@ export class Game {
 
     if (this.skyCapMaterial) {
       this.skyCapMaterial.color.lerp(tempColor.setHex(preset.skyCapColor), speed);
+    }
+
+    // Cross-fade sky materials
+    if (this.skyMaterialA && this.skyMaterialB) {
+      if (this.activeSkyLayer === 0) {
+        this.skyMaterialA.opacity += (1.0 - this.skyMaterialA.opacity) * speed;
+        this.skyMaterialB.opacity += (0.0 - this.skyMaterialB.opacity) * speed;
+      } else {
+        this.skyMaterialB.opacity += (1.0 - this.skyMaterialB.opacity) * speed;
+        this.skyMaterialA.opacity += (0.0 - this.skyMaterialA.opacity) * speed;
+      }
     }
 
     this.renderer.toneMappingExposure += (preset.exposure - this.renderer.toneMappingExposure) * speed;
