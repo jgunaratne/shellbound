@@ -1,6 +1,16 @@
 import * as THREE from 'three';
-import { getTerrainHeight } from './terrain';
+import { getTerrainHeight } from './Terrain';
 import grassTexUrl from '../assets/grass.png';
+
+type GrassShaderState = {
+  uniforms: Record<string, THREE.IUniform> & {
+    uTime?: THREE.IUniform<number>;
+  };
+};
+
+type GrassMaterial = THREE.MeshLambertMaterial & {
+  _grassShader?: GrassShaderState;
+};
 
 /**
  * High-performance GPU-Instanced 3D Grass System
@@ -56,7 +66,7 @@ export class InstancedGrass {
     tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;
 
-    const material = new THREE.MeshLambertMaterial({
+    const material: GrassMaterial = new THREE.MeshLambertMaterial({
       map: tex,
       color: new THREE.Color(0.65, 0.82, 0.45), // slight green tint to match terrain grass
       side: THREE.DoubleSide,
@@ -143,7 +153,7 @@ export class InstancedGrass {
       );
 
       // Store shader ref for uniform updates
-      (material as any)._grassShader = shader;
+      material._grassShader = shader;
     };
 
     // Create the InstancedMesh
@@ -211,9 +221,10 @@ export class InstancedGrass {
   }
 
   public update(time: number) {
-    const mat = this.mesh.material as any;
-    if (mat._grassShader?.uniforms) {
-      mat._grassShader.uniforms.uTime.value = time;
+    const material = this.mesh.material as GrassMaterial;
+    const timeUniform = material._grassShader?.uniforms.uTime;
+    if (timeUniform) {
+      timeUniform.value = time;
     }
   }
 }

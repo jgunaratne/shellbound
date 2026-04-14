@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { getTerrainHeight } from './terrain';
-import { colliders } from './environment';
+import { getTerrainHeight } from './Terrain';
+import { colliders } from './Environment';
 import turtleWalkUrl from '../assets/turtle_walking.glb';
 
 /* ── Constants ──────────────────────────────────────────────────────── */
@@ -30,6 +30,27 @@ function seededRng(seed: number) {
 /* ── State machine ──────────────────────────────────────────────────── */
 
 type NPCState = 'idle' | 'wander';
+
+function createLitMaterial(material: THREE.Material): THREE.MeshStandardMaterial {
+  const source = material as THREE.MeshStandardMaterial & {
+    map?: THREE.Texture | null;
+    color?: THREE.Color;
+  };
+  const litMaterial = new THREE.MeshStandardMaterial({
+    roughness: 0.7,
+    metalness: 0.1,
+    side: THREE.DoubleSide,
+  });
+
+  if (source.map) {
+    litMaterial.map = source.map;
+  }
+  if (source.color) {
+    litMaterial.color.copy(source.color);
+  }
+
+  return litMaterial;
+}
 
 /* ── Single NPC ─────────────────────────────────────────────────────── */
 
@@ -221,20 +242,10 @@ export class NPCTurtleManager {
         if (mesh.isMesh) {
           mesh.geometry.computeVertexNormals();
           if (mesh.material) {
-            const override = (oldMat: any) => {
-              const newMat = new THREE.MeshStandardMaterial({
-                roughness: 0.7,
-                metalness: 0.1,
-                side: THREE.DoubleSide,
-              });
-              if (oldMat.map) newMat.map = oldMat.map;
-              if (oldMat.color) newMat.color.copy(oldMat.color);
-              return newMat;
-            };
             if (Array.isArray(mesh.material)) {
-              mesh.material = mesh.material.map(override);
+              mesh.material = mesh.material.map((material) => createLitMaterial(material));
             } else {
-              mesh.material = override(mesh.material);
+              mesh.material = createLitMaterial(mesh.material);
             }
           }
         }

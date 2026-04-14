@@ -1,4 +1,4 @@
-import { getTerrainHeight } from './terrain';
+import { getTerrainHeight } from './Terrain';
 
 /* ── Minimap HUD ────────────────────────────────────────────────────── */
 
