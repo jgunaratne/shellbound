@@ -13,7 +13,6 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import pineTreeUrl from '../assets/pine_tree.glb';
 import treeUrl from '../assets/tree.glb';
 import rockUrl from '../assets/rock.glb';
-import mountainUrl from '../assets/mountains.glb';
 
 // Simple 2D circular collision registry to prevent clipping through static objects
 export const colliders: { x: number; z: number; radius: number }[] = [];
@@ -29,14 +28,12 @@ export function populateEnvironment(scene: THREE.Scene) {
     new Promise<any>((resolve, reject) => loader.load(pineTreeUrl, resolve, undefined, reject)),
     new Promise<any>((resolve, reject) => loader.load(treeUrl, resolve, undefined, reject)),
     new Promise<any>((resolve, reject) => loader.load(rockUrl, resolve, undefined, reject)),
-    new Promise<any>((resolve, reject) => loader.load(mountainUrl, resolve, undefined, reject))
-  ]).then(([pineGltf, normalGltf, rockGltf, mountainGltf]) => {
+  ]).then(([pineGltf, normalGltf, rockGltf]) => {
     const treeModels = [pineGltf.scene, normalGltf.scene];
     const baseRock = rockGltf.scene;
-    const baseMountain = mountainGltf.scene;
 
     // Enable shadows on the base models
-    [...treeModels, baseRock, baseMountain].forEach(model => {
+    [...treeModels, baseRock].forEach(model => {
       model.traverse((child: any) => {
         if (child.isMesh) {
           child.castShadow = true;
@@ -95,26 +92,7 @@ export function populateEnvironment(scene: THREE.Scene) {
     }
 
 
-
-    // Place towering mountains in a ring around the terrain edge
-    const mountainAngles = [0, 0.7, 1.4, 2.1, 2.8, 3.5, 4.2, 4.9, 5.6];
-    for (const angle of mountainAngles) {
-      const mountain = baseMountain.clone();
-      const dist = 200 + rand() * 50;
-      const x = Math.cos(angle) * dist;
-      const z = Math.sin(angle) * dist;
-
-      const scale = 100 + rand() * 100;
-      mountain.position.set(x, -5, z);
-      mountain.scale.setScalar(scale);
-      mountain.rotation.y = rand() * Math.PI * 2;
-      mountain.traverse((child: any) => {
-        if (child.isMesh) child.frustumCulled = false;
-      });
-      scene.add(mountain);
-    }
-
-    console.log('Trees, rocks, and mountains loaded and scattered');
+    console.log('Trees and rocks loaded and scattered');
   }).catch(err => {
     console.error('Failed to load GLB assets:', err);
   });
