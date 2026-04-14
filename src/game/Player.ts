@@ -78,9 +78,10 @@ export class Player {
       );
 
       if (dist < 1.5) {
-        collectMango(i, this.scene);
-        if (this.onMangoCollected) {
-          this.onMangoCollected();
+        if (collectMango(i, this.scene)) {
+          if (this.onMangoCollected) {
+            this.onMangoCollected();
+          }
         }
       }
     }
