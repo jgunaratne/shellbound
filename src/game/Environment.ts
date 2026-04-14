@@ -112,6 +112,7 @@ function createSeededRandom(seed: number) {
 }
 
 export function populateEnvironment(scene: THREE.Scene) {
+  mangos.length = 0; // Reset on remount / HMR
   const random = createSeededRandom(42);
   const loader = new GLTFLoader();
 
@@ -208,11 +209,14 @@ function scatterTrees(
 
 export const mangos: THREE.Object3D[] = [];
 
-export function collectMango(index: number, scene: THREE.Scene) {
+export function collectMango(index: number, scene: THREE.Scene): boolean {
   const mango = mangos[index];
-  if (!mango) return;
+  if (!mango || (mango as any)._collected) return false;
+  (mango as any)._collected = true;
+
   scene.remove(mango);
   mangos.splice(index, 1);
+  return true;
 }
 
 function scatterMangos(
