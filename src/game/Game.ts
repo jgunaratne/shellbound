@@ -12,6 +12,7 @@ import { populateEnvironment } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NpcTurtle';
 import { Minimap } from './Minimap';
+import { CaveMinimap } from './CaveMinimap';
 import { CAVE_BOUNDS, CAVE_SPAWN, createCaveScene, getCaveFloorHeight, isInsideCaveLayout } from './Cave';
 import skyUrl from '../assets/sky.png';
 import skyAfternoonUrl from '../assets/sky_afternoon.png';
@@ -113,6 +114,7 @@ export class Game {
   private readonly grass: InstancedGrass;
   private readonly npcTurtles: NPCTurtleManager;
   private readonly minimap: Minimap;
+  private readonly caveMinimap: CaveMinimap;
   private readonly tpCamera: ThirdPersonCamera;
   private composer: EffectComposer;
   private renderPass: RenderPass;
@@ -178,6 +180,7 @@ export class Game {
     });
     this.npcTurtles = new NPCTurtleManager(this.outdoorScene);
     this.minimap = new Minimap();
+    this.caveMinimap = new CaveMinimap();
     this.tpCamera = new ThirdPersonCamera();
     this.player.setGroundingResolvers(
       this.getOutdoorGroundHeight,
@@ -211,6 +214,7 @@ export class Game {
     cancelAnimationFrame(this.animId);
     this.input.dispose();
     this.minimap.dispose();
+    this.caveMinimap.dispose();
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('resize', this.onResize);
     this.bokehPass.dispose();
@@ -603,6 +607,7 @@ export class Game {
     this.outdoorScene.add(this.player.group);
     this.npcTurtles.setVisible(true);
     this.minimap.setVisible(true);
+    this.caveMinimap.setVisible(false);
     this.updatePostProcessingScene();
     this.player.setMovementBounds({
       minX: -OUTDOOR_WORLD_BOUNDS,
@@ -625,6 +630,7 @@ export class Game {
     this.caveScene.add(this.player.group);
     this.npcTurtles.setVisible(false);
     this.minimap.setVisible(false);
+    this.caveMinimap.setVisible(true);
     this.updatePostProcessingScene();
     this.renderer.toneMappingExposure = 1.85;
     this.player.setMovementBounds(CAVE_BOUNDS);
@@ -712,6 +718,11 @@ export class Game {
       this.player.position.z,
       this.player.facingAngle,
       this.npcTurtles.getPositions(),
+    );
+    this.caveMinimap.update(
+      this.player.position.x,
+      this.player.position.z,
+      this.player.facingAngle,
     );
 
     this.updateSkydomePosition();
