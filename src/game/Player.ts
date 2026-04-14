@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { getTerrainHeight } from './Terrain';
-import { colliders } from './Environment';
+import { queryNearbyColliders } from './Environment';
 import type { InputManager } from './InputManager';
 import turtleWalkUrl from '../assets/models/turtle_walking.glb';
 import turtleRunUrl from '../assets/models/turtle_running.glb';
@@ -231,7 +231,13 @@ export class Player {
   }
 
   private resolveColliderOverlaps() {
-    for (const collider of colliders) {
+    const nearbyColliders = queryNearbyColliders(
+      this.group.position.x,
+      this.group.position.z,
+      PLAYER_RADIUS + 5,
+    );
+
+    for (const collider of nearbyColliders) {
       const dx = this.group.position.x - collider.x;
       const dz = this.group.position.z - collider.z;
       const distance = Math.hypot(dx, dz);
