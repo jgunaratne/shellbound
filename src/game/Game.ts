@@ -330,6 +330,18 @@ export class Game {
 
       if (this.skyCapMaterial) this.skyCapMaterial.color.setHex(0xc9d8f0);
 
+      // Reset water to midday colors
+      if (waterMaterial && waterMaterial.uniforms) {
+        waterMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.04, 0.12);
+        waterMaterial.uniforms.uHighlightColor.value.setRGB(0.05, 0.15, 0.30);
+        waterMaterial.uniforms.uFogColor.value.setHex(0xc9d8f0);
+      }
+      if (lakeMaterial && lakeMaterial.uniforms) {
+        lakeMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.04, 0.12);
+        lakeMaterial.uniforms.uHighlightColor.value.setRGB(0.05, 0.15, 0.30);
+        lakeMaterial.uniforms.uFogColor.value.setHex(0xc9d8f0);
+      }
+
       this.renderer.toneMappingExposure = 1.4;
 
       // Swap sky texture
@@ -357,6 +369,18 @@ export class Game {
       (this.scene.background as THREE.Color).setHex(fogColor);
 
       if (this.skyCapMaterial) this.skyCapMaterial.color.setHex(0xc49060);
+
+      // Update water to late afternoon colors (deep dark blue)
+      if (waterMaterial && waterMaterial.uniforms) {
+        waterMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.03, 0.08);
+        waterMaterial.uniforms.uHighlightColor.value.setRGB(0.03, 0.06, 0.15);
+        waterMaterial.uniforms.uFogColor.value.setHex(0xd4a574);
+      }
+      if (lakeMaterial && lakeMaterial.uniforms) {
+        lakeMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.03, 0.08);
+        lakeMaterial.uniforms.uHighlightColor.value.setRGB(0.03, 0.06, 0.15);
+        lakeMaterial.uniforms.uFogColor.value.setHex(0xd4a574);
+      }
 
       this.renderer.toneMappingExposure = 1.35;
 

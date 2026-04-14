@@ -20,7 +20,6 @@ export class Player {
   private walkAction: THREE.AnimationAction | null = null;
   private runAction: THREE.AnimationAction | null = null;
   private jumpAction: THREE.AnimationAction | null = null;
-  private wasRunning = false;
   private isJumping = false;
   private verticalVelocity = 0;
   private groundY = 0;
@@ -230,7 +229,6 @@ export class Player {
         this.walkAction.setEffectiveWeight(1);
         this.runAction.setEffectiveWeight(0);
       }
-      this.wasRunning = isRunning;
     }
 
     // Update animation — play when moving or jumping, pause when idle on ground

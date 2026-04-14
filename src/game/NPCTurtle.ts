@@ -202,7 +202,10 @@ export class NPCTurtleManager {
   private npcs: SingleNPC[] = [];
   private loaded = false;
 
-  constructor(private scene: THREE.Scene) {
+  private scene: THREE.Scene;
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
     this.load();
   }
 
