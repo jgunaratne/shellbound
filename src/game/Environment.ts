@@ -130,6 +130,8 @@ export function populateEnvironment(scene: THREE.Scene) {
       enableShadows([...treeModels, baseRock, baseMango]);
       scatterRocks(scene, baseRock, random);
       scatterTrees(scene, treeModels, random);
+
+      mangos.length = 0; // Clear exactly before scattering to defeat any duplicate async race conditions
       scatterMangos(scene, baseMango, random);
 
       console.log('Trees, rocks, and mangos loaded and scattered');
