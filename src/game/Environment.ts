@@ -4,12 +4,14 @@ import { getTerrainHeight } from './Terrain';
 import pineTreeUrl from '../assets/models/pine_tree.glb';
 import treeUrl from '../assets/models/tree.glb';
 import rockUrl from '../assets/models/rock.glb';
+import mangoUrl from '../assets/models/mango.glb';
 
 export type Collider = { x: number; z: number; radius: number };
 type IndexedCollider = Collider & { _cellKey?: string };
 const ENVIRONMENT_SPREAD = 130;
 const ROCK_COUNT = 60;
 const TREE_COUNT = 300;
+const MANGO_COUNT = 100;
 const WATER_LEVEL = -1.9;
 const TREE_CLEAR_RADIUS = 60;
 const TALL_TREE_CHANCE = 0.2;
@@ -117,16 +119,19 @@ export function populateEnvironment(scene: THREE.Scene) {
     loader.loadAsync(pineTreeUrl),
     loader.loadAsync(treeUrl),
     loader.loadAsync(rockUrl),
+    loader.loadAsync(mangoUrl),
   ])
-    .then(([pineTree, tree, rock]) => {
+    .then(([pineTree, tree, rock, mango]) => {
       const treeModels = [pineTree.scene, tree.scene];
       const baseRock = rock.scene;
+      const baseMango = mango.scene;
 
-      enableShadows([...treeModels, baseRock]);
+      enableShadows([...treeModels, baseRock, baseMango]);
       scatterRocks(scene, baseRock, random);
       scatterTrees(scene, treeModels, random);
+      scatterMangos(scene, baseMango, random);
 
-      console.log('Trees and rocks loaded and scattered');
+      console.log('Trees, rocks, and mangos loaded and scattered');
     })
     .catch((error) => {
       console.error('Failed to load GLB assets:', error);
@@ -198,6 +203,34 @@ function scatterTrees(
 
     registerCollider({ x, z, radius: 0.4 * scale });
     scene.add(tree);
+  }
+}
+
+function scatterMangos(
+  scene: THREE.Scene,
+  baseMango: THREE.Object3D,
+  random: () => number,
+) {
+  for (let i = 0; i < MANGO_COUNT; i++) {
+    const x = randomWorldCoordinate(random);
+    const z = randomWorldCoordinate(random);
+
+    const terrainY = getTerrainHeight(x, z);
+    if (terrainY < WATER_LEVEL) {
+      continue;
+    }
+
+    const mango = baseMango.clone();
+    // Make mangos smaller
+    const scale = 0.3 + random() * 0.3;
+    // Raise them slightly above the terrain to sit neatly on the grass
+    mango.position.set(x, terrainY + 0.3, z);
+    mango.scale.setScalar(scale);
+    mango.rotation.y = random() * Math.PI * 2;
+    mango.rotation.x = (random() - 0.5) * 0.5;
+    mango.rotation.z = (random() - 0.5) * 0.5;
+
+    scene.add(mango);
   }
 }
 
