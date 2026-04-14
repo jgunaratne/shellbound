@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { InputManager } from './InputManager';
-import { getTerrainHeight } from './terrain';
+import { getTerrainHeight } from './Terrain';
 
 const DISTANCE = 7;
 const HEIGHT_OFFSET = 2.0;

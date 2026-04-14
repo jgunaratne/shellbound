@@ -365,7 +365,7 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   console.log('Merged geometry vertex count:', geometry.attributes.position.count);
   console.log('Old tiles still in scene: 0');
 
-  let mergedGeometry = mergeVertices(geometry, 0.0001);
+  const mergedGeometry = mergeVertices(geometry, 0.0001);
   mergedGeometry.computeVertexNormals();
 
   const mesh = new THREE.Mesh(mergedGeometry, material);

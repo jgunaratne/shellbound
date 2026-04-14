@@ -7,411 +7,425 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { InputManager } from './InputManager';
 import { Player } from './Player';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
-import { createTerrain, createWater, waterMaterial, lakeMaterial } from './terrain';
-import { populateEnvironment } from './environment';
+import { createTerrain, createWater, waterMaterial, lakeMaterial } from './Terrain';
+import { populateEnvironment } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
-import { NPCTurtleManager } from './NPCTurtle';
+import { NPCTurtleManager } from './NpcTurtle';
 import { Minimap } from './Minimap';
 import skyUrl from '../assets/sky.png';
 import skyAfternoonUrl from '../assets/sky_afternoon.png';
 
+type PresetId = '1' | '2';
+
+type PresetDefinition = {
+  sun: { color: number; intensity: number; position: [number, number, number] };
+  ambient: { color: number; intensity: number };
+  fill: { color: number; intensity: number };
+  fogColor: number;
+  skyCapColor: number;
+  exposure: number;
+  skyUrl: string;
+  water: {
+    baseColor: [number, number, number];
+    highlightColor: [number, number, number];
+  };
+};
+
+const FOG_COLOR = 0xc9d8f0;
+const SHADOW_WORLD_HALF = 150;
+const SKY_TEXTURE_SIZE = { width: 1024, height: 512 };
+const SKY_EDGE_BLEND = 0.35;
+const SKY_TEXTURE_REPEAT_X = 3;
+const SKY_RADIUS = 350;
+const SKY_HEIGHT = 800;
+const GRASS_INSTANCE_COUNT = 80000;
+
+const PRESETS: Record<PresetId, PresetDefinition> = {
+  '1': {
+    sun: { color: 0xfff5e0, intensity: 2.8, position: [100, 150, 50] },
+    ambient: { color: 0xc9d8f0, intensity: 1.0 },
+    fill: { color: 0xc9d8f0, intensity: 1.2 },
+    fogColor: 0xc9d8f0,
+    skyCapColor: 0xc9d8f0,
+    exposure: 1.4,
+    skyUrl,
+    water: {
+      baseColor: [0.01, 0.04, 0.12],
+      highlightColor: [0.05, 0.15, 0.3],
+    },
+  },
+  '2': {
+    sun: { color: 0xffb347, intensity: 2.6, position: [80, 40, 80] },
+    ambient: { color: 0x9a8ab0, intensity: 1.0 },
+    fill: { color: 0x6a7aaa, intensity: 1.2 },
+    fogColor: 0xd4a574,
+    skyCapColor: 0xc49060,
+    exposure: 1.35,
+    skyUrl: skyAfternoonUrl,
+    water: {
+      baseColor: [0.01, 0.03, 0.08],
+      highlightColor: [0.03, 0.06, 0.15],
+    },
+  },
+};
+
 export class Game {
-  private scene: THREE.Scene;
-  private renderer: THREE.WebGLRenderer;
-  private input: InputManager;
-  private player: Player;
-  private grass!: InstancedGrass;
-  private npcTurtles!: NPCTurtleManager;
-  private minimap!: Minimap;
-  private tpCamera: ThirdPersonCamera;
-  private skydome: THREE.Object3D | null = null;
+  private readonly scene: THREE.Scene;
+  private readonly renderer: THREE.WebGLRenderer;
+  private readonly input: InputManager;
+  private readonly player: Player;
+  private readonly grass: InstancedGrass;
+  private readonly npcTurtles: NPCTurtleManager;
+  private readonly minimap: Minimap;
+  private readonly tpCamera: ThirdPersonCamera;
+  private readonly composer: EffectComposer;
+  private readonly bokehPass: BokehPass;
+  private readonly sun: THREE.DirectionalLight;
+  private readonly ambientLight: THREE.AmbientLight;
+  private readonly fillLight: THREE.DirectionalLight;
+  private currentPreset: PresetId = '1';
+  private skydome: THREE.Group | null = null;
   private skyMaterial: THREE.MeshBasicMaterial | null = null;
   private skyCapMaterial: THREE.MeshBasicMaterial | null = null;
-  private composer!: EffectComposer;
-  private bokehPass!: BokehPass;
-  private ssaoPass!: SSAOPass;
   private animId = 0;
   private lastTime = 0;
-  private sun!: THREE.DirectionalLight;
-  private ambientLight!: THREE.AmbientLight;
-  private fillLight!: THREE.DirectionalLight;
-  private currentPreset: '1' | '2' = '1';
-  private onKeyHandler: (e: KeyboardEvent) => void;
 
   constructor(canvas: HTMLCanvasElement) {
-    // --- Renderer ---
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.4;
+    this.renderer = this.createRenderer(canvas);
+    this.scene = this.createScene();
+    this.createSkydome(PRESETS[this.currentPreset].skyUrl);
 
-    // --- Scene ---
-    this.scene = new THREE.Scene();
-    const fogColor = 0xc9d8f0; // cool sky blue haze as specified
-    this.scene.fog = new THREE.FogExp2(fogColor, 0.0025);
-    this.scene.background = new THREE.Color(fogColor);
+    const lighting = this.createLighting();
+    this.sun = lighting.sun;
+    this.ambientLight = lighting.ambientLight;
+    this.fillLight = lighting.fillLight;
 
-    // --- Skydome ---
-    this.createSkydome();
-
-    // --- Lighting System (Realistic multi-source standard) ---
-    
-    // 1. Sky ambient bounce fill
-    this.ambientLight = new THREE.AmbientLight(0xc9d8f0, 1.0);
-    this.scene.add(this.ambientLight);
-
-    // 2. Primary mid-afternoon sun (warm)
-    const sun = new THREE.DirectionalLight(0xfff5e0, 2.8);
-    sun.position.set(100, 150, 50);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    const halfWorld = 150;
-    sun.shadow.camera.left = -halfWorld;
-    sun.shadow.camera.right = halfWorld;
-    sun.shadow.camera.top = halfWorld;
-    sun.shadow.camera.bottom = -halfWorld;
-    sun.shadow.camera.near = 0.5;
-    sun.shadow.camera.far = 500;
-    sun.shadow.bias = -0.0005;
-    sun.shadow.normalBias = 0.02;
-    sun.shadow.camera.updateProjectionMatrix();
-    this.sun = sun;
-    this.scene.add(sun);
-
-    // 3. Secondary subtle cooler back-fill to illuminate shadowed faces naturally
-    this.fillLight = new THREE.DirectionalLight(0xc9d8f0, 1.2);
-    this.fillLight.position.set(-100, 50, -50);
-    this.scene.add(this.fillLight);
-
-    // --- Time-of-day key handler ---
-    this.onKeyHandler = (e: KeyboardEvent) => {
-      if (e.code === 'Digit1' && this.currentPreset !== '1') {
-        this.currentPreset = '1';
-        this.applyPreset('1');
-      } else if (e.code === 'Digit2' && this.currentPreset !== '2') {
-        this.currentPreset = '2';
-        this.applyPreset('2');
-      }
-    };
-    window.addEventListener('keydown', this.onKeyHandler);
-
-    // --- Terrain & water ---
-    createTerrain(this.scene);
-    createWater(this.scene);
-
-    // --- Environment ---
-    populateEnvironment(this.scene);
-
-    // --- High-Performance Instanced 3D Grass ---
-    this.grass = new InstancedGrass(80000);
+    this.initializeWorld();
+    this.grass = new InstancedGrass(GRASS_INSTANCE_COUNT);
     this.scene.add(this.grass.mesh);
 
-
-
-    // --- Player ---
     this.player = new Player(this.scene);
-
-    // --- NPC Turtles ---
     this.npcTurtles = new NPCTurtleManager(this.scene);
-
-    // --- Minimap HUD ---
     this.minimap = new Minimap();
-
-    // --- Camera ---
     this.tpCamera = new ThirdPersonCamera();
-
-    // --- Input ---
     this.input = new InputManager(canvas);
 
-    // --- Post-processing (Realistic Depth of Field) ---
-    this.composer = new EffectComposer(this.renderer);
-    
-    const renderPass = new RenderPass(this.scene, this.tpCamera.camera);
-    this.composer.addPass(renderPass);
-
-    this.ssaoPass = new SSAOPass(this.scene, this.tpCamera.camera, window.innerWidth, window.innerHeight);
-    this.ssaoPass.kernelRadius = 12;
-    this.ssaoPass.minDistance = 0.0025;
-    this.ssaoPass.maxDistance = 0.1;
-    this.composer.addPass(this.ssaoPass);
-
-    this.bokehPass = new BokehPass(this.scene, this.tpCamera.camera, {
-      focus: 7.0,       // Focus precisely centered on the player
-      aperture: 0.0001, // Tighter aperture for a significantly sharper foreground
-      maxblur: 0.004    // Reduced maximum blur to keep the background much clearer
-    });
-    this.composer.addPass(this.bokehPass);
-
-    const outputPass = new OutputPass();
-    this.composer.addPass(outputPass);
-
-    // --- Resize ---
+    const postProcessing = this.createPostProcessing();
+    this.composer = postProcessing.composer;
+    this.bokehPass = postProcessing.bokehPass;
+    window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('resize', this.onResize);
   }
-
-  private createSkydome() {
-    const img = new Image();
-    img.onload = () => {
-      // Feather horizontal edges so the sky tiles seamlessly (same technique as grass)
-      const W = 1024;
-      const H = 512;
-      const canvas = document.createElement('canvas');
-      canvas.width = W;
-      canvas.height = H;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, W, H);
-      const origData = ctx.getImageData(0, 0, W, H);
-      const origPx = origData.data;
-
-      // Create horizontally-offset copy (shift by half width)
-      const offCanvas = document.createElement('canvas');
-      offCanvas.width = W;
-      offCanvas.height = H;
-      const offCtx = offCanvas.getContext('2d')!;
-      const halfW = W / 2;
-      offCtx.drawImage(canvas, halfW, 0, halfW, H, 0, 0, halfW, H);
-      offCtx.drawImage(canvas, 0, 0, halfW, H, halfW, 0, halfW, H);
-      const offData = offCtx.getImageData(0, 0, W, H);
-      const offPx = offData.data;
-
-      // Blend: original in center, offset at horizontal edges
-      const BLEND = 0.35;
-      const result = ctx.createImageData(W, H);
-      const out = result.data;
-
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const nx = x / W;
-          const wx = nx < BLEND ? nx / BLEND
-                    : nx > (1 - BLEND) ? (1 - nx) / BLEND
-                    : 1.0;
-          const w = 0.5 - 0.5 * Math.cos(wx * Math.PI);
-          const i = (y * W + x) * 4;
-          out[i]     = origPx[i]     * w + offPx[i]     * (1 - w);
-          out[i + 1] = origPx[i + 1] * w + offPx[i + 1] * (1 - w);
-          out[i + 2] = origPx[i + 2] * w + offPx[i + 2] * (1 - w);
-          out[i + 3] = 255;
-        }
-      }
-
-      ctx.putImageData(result, 0, 0);
-
-      const texture = new THREE.CanvasTexture(canvas);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.wrapS = THREE.RepeatWrapping;
-      texture.wrapT = THREE.ClampToEdgeWrapping;
-      texture.repeat.set(3, 1);
-
-      const skyRadius = 350;
-      const skyHeight = 800;
-      const geo = new THREE.CylinderGeometry(
-        skyRadius, skyRadius, skyHeight, 64, 1, true
-      );
-      const mat = new THREE.MeshBasicMaterial({
-        map: texture,
-        side: THREE.BackSide,
-        depthWrite: false,
-        fog: false,
-      });
-      this.skyMaterial = mat;
-
-      // Cinematic sky blur shader
-      mat.onBeforeCompile = (shader) => {
-        shader.fragmentShader = shader.fragmentShader.replace(
-          'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
-          `
-          float blurAmt = 0.008;
-          vec4 sampledDiffuseColor = (
-            texture2D(map, vMapUv) +
-            texture2D(map, vMapUv + vec2(blurAmt, 0.0)) +
-            texture2D(map, vMapUv - vec2(blurAmt, 0.0)) +
-            texture2D(map, vMapUv + vec2(0.0, blurAmt)) +
-            texture2D(map, vMapUv - vec2(0.0, blurAmt)) +
-            texture2D(map, vMapUv + vec2(blurAmt, blurAmt)) +
-            texture2D(map, vMapUv - vec2(blurAmt, blurAmt))
-          ) / 7.0;
-          `
-        );
-      };
-
-      const skyGroup = new THREE.Group();
-      const cylinder = new THREE.Mesh(geo, mat);
-      skyGroup.add(cylinder);
-
-      // Disc cap to close the top
-      const capGeo = new THREE.CircleGeometry(skyRadius, 64);
-      const capMat = new THREE.MeshBasicMaterial({
-        color: 0xc9d8f0,
-        side: THREE.BackSide,
-        depthWrite: false,
-        fog: false,
-      });
-      this.skyCapMaterial = capMat;
-      const cap = new THREE.Mesh(capGeo, capMat);
-      cap.rotation.x = Math.PI / 2;
-      cap.position.y = skyHeight / 2;
-      skyGroup.add(cap);
-
-      skyGroup.position.y = 300;
-      skyGroup.renderOrder = -1;
-      this.skydome = skyGroup;
-      this.scene.add(skyGroup);
-    };
-    img.src = skyUrl;
-  }
-
-  /** Load a sky image, feather its edges, and return a repeating CanvasTexture */
-  private loadSkyTexture(url: string, callback: (tex: THREE.CanvasTexture) => void) {
-    const img = new Image();
-    img.onload = () => {
-      const W = 1024, H = 512;
-      const canvas = document.createElement('canvas');
-      canvas.width = W; canvas.height = H;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, W, H);
-      const origData = ctx.getImageData(0, 0, W, H);
-      const origPx = origData.data;
-
-      const offCanvas = document.createElement('canvas');
-      offCanvas.width = W; offCanvas.height = H;
-      const offCtx = offCanvas.getContext('2d')!;
-      const halfW = W / 2;
-      offCtx.drawImage(canvas, halfW, 0, halfW, H, 0, 0, halfW, H);
-      offCtx.drawImage(canvas, 0, 0, halfW, H, halfW, 0, halfW, H);
-      const offPx = offCtx.getImageData(0, 0, W, H).data;
-
-      const BLEND = 0.35;
-      const result = ctx.createImageData(W, H);
-      const out = result.data;
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const nx = x / W;
-          const wx = nx < BLEND ? nx / BLEND : nx > (1 - BLEND) ? (1 - nx) / BLEND : 1.0;
-          const w = 0.5 - 0.5 * Math.cos(wx * Math.PI);
-          const i = (y * W + x) * 4;
-          out[i]     = origPx[i]     * w + offPx[i]     * (1 - w);
-          out[i + 1] = origPx[i + 1] * w + offPx[i + 1] * (1 - w);
-          out[i + 2] = origPx[i + 2] * w + offPx[i + 2] * (1 - w);
-          out[i + 3] = 255;
-        }
-      }
-      ctx.putImageData(result, 0, 0);
-
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.RepeatWrapping;
-      tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.repeat.set(3, 1);
-      callback(tex);
-    };
-    img.src = url;
-  }
-
-  /** Apply a time-of-day preset */
-  private applyPreset(preset: '1' | '2') {
-    if (preset === '1') {
-      // ── Midday ──
-      this.sun.color.setHex(0xfff5e0);
-      this.sun.intensity = 2.8;
-      this.sun.position.set(100, 150, 50);
-
-      this.ambientLight.color.setHex(0xc9d8f0);
-      this.ambientLight.intensity = 1.0;
-
-      this.fillLight.color.setHex(0xc9d8f0);
-      this.fillLight.intensity = 1.2;
-
-      const fogColor = 0xc9d8f0;
-      (this.scene.fog as THREE.FogExp2).color.setHex(fogColor);
-      (this.scene.background as THREE.Color).setHex(fogColor);
-
-      if (this.skyCapMaterial) this.skyCapMaterial.color.setHex(0xc9d8f0);
-
-      // Reset water to midday colors
-      if (waterMaterial && waterMaterial.uniforms) {
-        waterMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.04, 0.12);
-        waterMaterial.uniforms.uHighlightColor.value.setRGB(0.05, 0.15, 0.30);
-        waterMaterial.uniforms.uFogColor.value.setHex(0xc9d8f0);
-      }
-      if (lakeMaterial && lakeMaterial.uniforms) {
-        lakeMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.04, 0.12);
-        lakeMaterial.uniforms.uHighlightColor.value.setRGB(0.05, 0.15, 0.30);
-        lakeMaterial.uniforms.uFogColor.value.setHex(0xc9d8f0);
-      }
-
-      this.renderer.toneMappingExposure = 1.4;
-
-      // Swap sky texture
-      this.loadSkyTexture(skyUrl, (tex) => {
-        if (this.skyMaterial) {
-          this.skyMaterial.map?.dispose();
-          this.skyMaterial.map = tex;
-          this.skyMaterial.needsUpdate = true;
-        }
-      });
-    } else {
-      // ── Late Afternoon / Early Evening ──
-      this.sun.color.setHex(0xffb347); // warm amber-orange sun
-      this.sun.intensity = 2.6;
-      this.sun.position.set(80, 40, 80); // low on the horizon
-
-      this.ambientLight.color.setHex(0x9a8ab0); // lighter dusky ambient
-      this.ambientLight.intensity = 1.0;
-
-      this.fillLight.color.setHex(0x6a7aaa); // brighter blue backfill
-      this.fillLight.intensity = 1.2;
-
-      const fogColor = 0xd4a574; // warm hazy amber fog
-      (this.scene.fog as THREE.FogExp2).color.setHex(fogColor);
-      (this.scene.background as THREE.Color).setHex(fogColor);
-
-      if (this.skyCapMaterial) this.skyCapMaterial.color.setHex(0xc49060);
-
-      // Update water to late afternoon colors (deep dark blue)
-      if (waterMaterial && waterMaterial.uniforms) {
-        waterMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.03, 0.08);
-        waterMaterial.uniforms.uHighlightColor.value.setRGB(0.03, 0.06, 0.15);
-        waterMaterial.uniforms.uFogColor.value.setHex(0xd4a574);
-      }
-      if (lakeMaterial && lakeMaterial.uniforms) {
-        lakeMaterial.uniforms.uBaseColor.value.setRGB(0.01, 0.03, 0.08);
-        lakeMaterial.uniforms.uHighlightColor.value.setRGB(0.03, 0.06, 0.15);
-        lakeMaterial.uniforms.uFogColor.value.setHex(0xd4a574);
-      }
-
-      this.renderer.toneMappingExposure = 1.35;
-
-      // Swap sky texture
-      this.loadSkyTexture(skyAfternoonUrl, (tex) => {
-        if (this.skyMaterial) {
-          this.skyMaterial.map?.dispose();
-          this.skyMaterial.map = tex;
-          this.skyMaterial.needsUpdate = true;
-        }
-      });
-    }
-  }
-
-
 
   start() {
     this.lastTime = performance.now();
     this.loop(this.lastTime);
   }
 
-  private loop = (time: number) => {
+  dispose() {
+    cancelAnimationFrame(this.animId);
+    this.input.dispose();
+    this.minimap.dispose();
+    window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('resize', this.onResize);
+    this.bokehPass.dispose();
+    this.composer.dispose();
+    this.renderer.dispose();
+  }
+
+  private createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = PRESETS[this.currentPreset].exposure;
+    return renderer;
+  }
+
+  private createScene(): THREE.Scene {
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(FOG_COLOR, 0.0025);
+    scene.background = new THREE.Color(FOG_COLOR);
+    return scene;
+  }
+
+  private createLighting() {
+    const ambientLight = new THREE.AmbientLight(FOG_COLOR, 1.0);
+    this.scene.add(ambientLight);
+
+    const sun = new THREE.DirectionalLight(0xfff5e0, 2.8);
+    sun.position.set(100, 150, 50);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -SHADOW_WORLD_HALF;
+    sun.shadow.camera.right = SHADOW_WORLD_HALF;
+    sun.shadow.camera.top = SHADOW_WORLD_HALF;
+    sun.shadow.camera.bottom = -SHADOW_WORLD_HALF;
+    sun.shadow.camera.near = 0.5;
+    sun.shadow.camera.far = 500;
+    sun.shadow.bias = -0.0005;
+    sun.shadow.normalBias = 0.02;
+    sun.shadow.camera.updateProjectionMatrix();
+    this.scene.add(sun);
+
+    const fillLight = new THREE.DirectionalLight(FOG_COLOR, 1.2);
+    fillLight.position.set(-100, 50, -50);
+    this.scene.add(fillLight);
+
+    return { sun, ambientLight, fillLight };
+  }
+
+  private initializeWorld() {
+    createTerrain(this.scene);
+    createWater(this.scene);
+    populateEnvironment(this.scene);
+  }
+
+  private createPostProcessing() {
+    const composer = new EffectComposer(this.renderer);
+    composer.addPass(new RenderPass(this.scene, this.tpCamera.camera));
+
+    const ssaoPass = new SSAOPass(
+      this.scene,
+      this.tpCamera.camera,
+      window.innerWidth,
+      window.innerHeight,
+    );
+    ssaoPass.kernelRadius = 12;
+    ssaoPass.minDistance = 0.0025;
+    ssaoPass.maxDistance = 0.1;
+    composer.addPass(ssaoPass);
+
+    const bokehPass = new BokehPass(this.scene, this.tpCamera.camera, {
+      focus: 7.0,
+      aperture: 0.0001,
+      maxblur: 0.004,
+    });
+    composer.addPass(bokehPass);
+    composer.addPass(new OutputPass());
+
+    return { composer, bokehPass, ssaoPass };
+  }
+
+  private createSkydome(url: string) {
+    this.loadSkyTexture(url, (texture) => {
+      const skyGroup = new THREE.Group();
+      const skyMaterial = this.createSkyMaterial(texture);
+      const skyCylinder = new THREE.Mesh(
+        new THREE.CylinderGeometry(SKY_RADIUS, SKY_RADIUS, SKY_HEIGHT, 64, 1, true),
+        skyMaterial,
+      );
+      skyGroup.add(skyCylinder);
+
+      const skyCapMaterial = new THREE.MeshBasicMaterial({
+        color: FOG_COLOR,
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+      });
+      const skyCap = new THREE.Mesh(new THREE.CircleGeometry(SKY_RADIUS, 64), skyCapMaterial);
+      skyCap.rotation.x = Math.PI / 2;
+      skyCap.position.y = SKY_HEIGHT / 2;
+      skyGroup.add(skyCap);
+
+      skyGroup.position.y = 300;
+      skyGroup.renderOrder = -1;
+
+      this.skyMaterial = skyMaterial;
+      this.skyCapMaterial = skyCapMaterial;
+      this.skydome = skyGroup;
+      this.scene.add(skyGroup);
+    });
+  }
+
+  private createSkyMaterial(texture: THREE.CanvasTexture): THREE.MeshBasicMaterial {
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+
+    material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
+        `
+        float blurAmt = 0.008;
+        vec4 sampledDiffuseColor = (
+          texture2D(map, vMapUv) +
+          texture2D(map, vMapUv + vec2(blurAmt, 0.0)) +
+          texture2D(map, vMapUv - vec2(blurAmt, 0.0)) +
+          texture2D(map, vMapUv + vec2(0.0, blurAmt)) +
+          texture2D(map, vMapUv - vec2(0.0, blurAmt)) +
+          texture2D(map, vMapUv + vec2(blurAmt, blurAmt)) +
+          texture2D(map, vMapUv - vec2(blurAmt, blurAmt))
+        ) / 7.0;
+        `,
+      );
+    };
+
+    return material;
+  }
+
+  private loadSkyTexture(url: string, callback: (texture: THREE.CanvasTexture) => void) {
+    const img = new Image();
+    img.onload = () => callback(this.buildFeatheredSkyTexture(img));
+    img.src = url;
+  }
+
+  private buildFeatheredSkyTexture(img: HTMLImageElement): THREE.CanvasTexture {
+    const { width, height } = SKY_TEXTURE_SIZE;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to create sky texture canvas context');
+    }
+
+    ctx.drawImage(img, 0, 0, width, height);
+    const originalPixels = ctx.getImageData(0, 0, width, height).data;
+    const offsetPixels = this.createOffsetSkyPixels(canvas, width, height);
+    const result = ctx.createImageData(width, height);
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const blend = this.getHorizontalBlendWeight(x / width);
+        const index = (y * width + x) * 4;
+        result.data[index] = originalPixels[index] * blend + offsetPixels[index] * (1 - blend);
+        result.data[index + 1] =
+          originalPixels[index + 1] * blend + offsetPixels[index + 1] * (1 - blend);
+        result.data[index + 2] =
+          originalPixels[index + 2] * blend + offsetPixels[index + 2] * (1 - blend);
+        result.data[index + 3] = 255;
+      }
+    }
+
+    ctx.putImageData(result, 0, 0);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.repeat.set(SKY_TEXTURE_REPEAT_X, 1);
+    return texture;
+  }
+
+  private createOffsetSkyPixels(
+    sourceCanvas: HTMLCanvasElement,
+    width: number,
+    height: number,
+  ): Uint8ClampedArray {
+    const offsetCanvas = document.createElement('canvas');
+    offsetCanvas.width = width;
+    offsetCanvas.height = height;
+    const offsetCtx = offsetCanvas.getContext('2d');
+    if (!offsetCtx) {
+      throw new Error('Failed to create offset sky texture canvas context');
+    }
+
+    const halfWidth = width / 2;
+    offsetCtx.drawImage(sourceCanvas, halfWidth, 0, halfWidth, height, 0, 0, halfWidth, height);
+    offsetCtx.drawImage(sourceCanvas, 0, 0, halfWidth, height, halfWidth, 0, halfWidth, height);
+
+    return offsetCtx.getImageData(0, 0, width, height).data;
+  }
+
+  private getHorizontalBlendWeight(normalizedX: number): number {
+    const edgeWeight =
+      normalizedX < SKY_EDGE_BLEND
+        ? normalizedX / SKY_EDGE_BLEND
+        : normalizedX > 1 - SKY_EDGE_BLEND
+          ? (1 - normalizedX) / SKY_EDGE_BLEND
+          : 1;
+
+    return 0.5 - 0.5 * Math.cos(edgeWeight * Math.PI);
+  }
+
+  private applyPreset(presetId: PresetId) {
+    const preset = PRESETS[presetId];
+
+    this.sun.color.setHex(preset.sun.color);
+    this.sun.intensity = preset.sun.intensity;
+    this.sun.position.set(...preset.sun.position);
+
+    this.ambientLight.color.setHex(preset.ambient.color);
+    this.ambientLight.intensity = preset.ambient.intensity;
+
+    this.fillLight.color.setHex(preset.fill.color);
+    this.fillLight.intensity = preset.fill.intensity;
+
+    this.setFogColor(preset.fogColor);
+    this.skyCapMaterial?.color.setHex(preset.skyCapColor);
+    this.renderer.toneMappingExposure = preset.exposure;
+
+    this.updateWaterColors(
+      preset.water.baseColor,
+      preset.water.highlightColor,
+      preset.fogColor,
+    );
+
+    this.loadSkyTexture(preset.skyUrl, (texture) => {
+      if (!this.skyMaterial) {
+        return;
+      }
+
+      this.skyMaterial.map?.dispose();
+      this.skyMaterial.map = texture;
+      this.skyMaterial.needsUpdate = true;
+    });
+  }
+
+  private setFogColor(color: number) {
+    (this.scene.fog as THREE.FogExp2).color.setHex(color);
+    (this.scene.background as THREE.Color).setHex(color);
+  }
+
+  private updateWaterColors(
+    baseColor: [number, number, number],
+    highlightColor: [number, number, number],
+    fogColor: number,
+  ) {
+    for (const material of [waterMaterial, lakeMaterial]) {
+      if (!material?.uniforms) {
+        continue;
+      }
+
+      material.uniforms.uBaseColor.value.setRGB(...baseColor);
+      material.uniforms.uHighlightColor.value.setRGB(...highlightColor);
+      material.uniforms.uFogColor.value.setHex(fogColor);
+    }
+  }
+
+  private updateWaterTime(timeSeconds: number) {
+    for (const material of [waterMaterial, lakeMaterial]) {
+      if (material?.uniforms) {
+        material.uniforms.uTime.value = timeSeconds;
+      }
+    }
+  }
+
+  private updateSkydomePosition() {
+    if (!this.skydome) {
+      return;
+    }
+
+    const cameraPosition = this.tpCamera.camera.position;
+    this.skydome.position.set(cameraPosition.x, 0, cameraPosition.z);
+  }
+
+  private readonly loop = (time: number) => {
     this.animId = requestAnimationFrame(this.loop);
     const dt = Math.min((time - this.lastTime) / 1000, 0.05);
+    const timeSeconds = time / 1000;
     this.lastTime = time;
 
     this.player.update(dt, this.input, this.tpCamera.cameraYaw);
     this.npcTurtles.update(dt);
     this.tpCamera.update(dt, this.player.position, this.input);
 
-    // Update minimap HUD
     this.minimap.update(
       this.player.position.x,
       this.player.position.z,
@@ -419,43 +433,25 @@ export class Game {
       this.npcTurtles.getPositions(),
     );
 
-    // Keep skydome centered on the camera so it appears infinitely far
-    if (this.skydome) {
-      const camPos = this.tpCamera.camera.position;
-      this.skydome.position.set(camPos.x, 0, camPos.z);
-    }
-
-    // Animate the highly realistic water turbulence shader
-    const waterTime = time / 1000.0;
-    if (waterMaterial && waterMaterial.uniforms) {
-      waterMaterial.uniforms.uTime.value = waterTime;
-    }
-    if (lakeMaterial && lakeMaterial.uniforms) {
-      lakeMaterial.uniforms.uTime.value = waterTime;
-    }
-
-    // Animate the highly performant 3D Instanced Grass swaying in the wind
-    if (this.grass) {
-      this.grass.update(time / 1000.0);
-    }
-
+    this.updateSkydomePosition();
+    this.updateWaterTime(timeSeconds);
+    this.grass.update(timeSeconds);
     this.composer.render();
   };
 
-  private onResize = () => {
+  private readonly onResize = () => {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.composer.setSize(window.innerWidth, window.innerHeight);
     this.tpCamera.onResize();
   };
 
-  dispose() {
-    cancelAnimationFrame(this.animId);
-    this.input.dispose();
-    this.minimap.dispose();
-    window.removeEventListener('keydown', this.onKeyHandler);
-    window.removeEventListener('resize', this.onResize);
-    this.bokehPass.dispose();
-    this.composer.dispose();
-    this.renderer.dispose();
-  }
+  private readonly onKeyDown = (event: KeyboardEvent) => {
+    if (event.code === 'Digit1' && this.currentPreset !== '1') {
+      this.currentPreset = '1';
+      this.applyPreset('1');
+    } else if (event.code === 'Digit2' && this.currentPreset !== '2') {
+      this.currentPreset = '2';
+      this.applyPreset('2');
+    }
+  };
 }
