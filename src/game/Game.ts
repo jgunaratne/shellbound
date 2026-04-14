@@ -608,17 +608,17 @@ export class Game {
     this.npcTurtles.setVisible(false);
     this.minimap.setVisible(false);
     this.caveWorld.visible = true;
-    this.caveLight.intensity = 2.7;
-    this.caveFillLight.intensity = 0.8;
+    this.caveLight.intensity = 6.5;
+    this.caveFillLight.intensity = 2.2;
     this.sun.visible = false;
     this.fillLight.visible = false;
-    this.ambientLight.color.setHex(0x3a312c);
-    this.ambientLight.intensity = 0.5;
+    this.ambientLight.color.setHex(0x7a6a56);
+    this.ambientLight.intensity = 1.35;
     if (this.skydome) {
       this.skydome.visible = false;
     }
-    this.setFogColor(0x120f0d);
-    this.renderer.toneMappingExposure = 1.1;
+    this.setFogColor(0x2a211b);
+    this.renderer.toneMappingExposure = 1.6;
     this.player.setMovementBounds(CAVE_BOUNDS);
     this.player.setPosition(CAVE_SPAWN.x, CAVE_SPAWN.y, CAVE_SPAWN.z);
   }

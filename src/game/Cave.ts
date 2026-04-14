@@ -38,6 +38,19 @@ function createRockMaterial(color: number) {
   });
 }
 
+function createLantern(color: number) {
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(0.7, 16, 16),
+    new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 2.4,
+      roughness: 0.35,
+      metalness: 0.05,
+    }),
+  );
+}
+
 export function createCaveScene(floorY: number): THREE.Group {
   const cave = new THREE.Group();
   cave.name = 'cave_world';
@@ -45,8 +58,8 @@ export function createCaveScene(floorY: number): THREE.Group {
   const floor = new THREE.Mesh(
     new THREE.CircleGeometry(CAVE_RADIUS, 32),
     new THREE.MeshStandardMaterial({
-      color: 0x4a4033,
-      roughness: 1,
+      color: 0x6a5b47,
+      roughness: 0.98,
       metalness: 0.02,
     }),
   );
@@ -55,7 +68,7 @@ export function createCaveScene(floorY: number): THREE.Group {
   floor.receiveShadow = true;
   cave.add(floor);
 
-  const wallMaterial = createRockMaterial(0x2d2926);
+  const wallMaterial = createRockMaterial(0x4c4339);
   const wall = new THREE.Mesh(
     new THREE.CylinderGeometry(CAVE_RADIUS, CAVE_RADIUS + 2, CAVE_HEIGHT, 18, 5, true),
     wallMaterial,
@@ -67,7 +80,7 @@ export function createCaveScene(floorY: number): THREE.Group {
 
   const ceiling = new THREE.Mesh(
     new THREE.SphereGeometry(CAVE_RADIUS * 0.92, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2.2),
-    createRockMaterial(0x221f1b),
+    createRockMaterial(0x3a342f),
   );
   ceiling.position.y = floorY + CAVE_HEIGHT - 2;
   ceiling.scale.y = 0.65;
@@ -77,7 +90,7 @@ export function createCaveScene(floorY: number): THREE.Group {
 
   const stalagmiteGeometry = createRockGeometry(1.4, 4.8);
   const stalactiteGeometry = createRockGeometry(1.2, 5.2);
-  const accentMaterial = createRockMaterial(0x615347);
+  const accentMaterial = createRockMaterial(0x7c6b59);
   const count = 12;
 
   for (let i = 0; i < count; i++) {
@@ -121,6 +134,32 @@ export function createCaveScene(floorY: number): THREE.Group {
     ember.position.copy(offset);
     cave.add(ember);
   }
+
+  const fireLight = new THREE.PointLight(0xffa15a, 12, 22, 1.8);
+  fireLight.position.set(-3.2, floorY + 1.8, -3.2);
+  fireLight.castShadow = true;
+  fireLight.shadow.mapSize.set(1024, 1024);
+  cave.add(fireLight);
+
+  const lanternPositions = [
+    new THREE.Vector3(-10, floorY + 4.6, -8),
+    new THREE.Vector3(9, floorY + 5.2, -6),
+    new THREE.Vector3(7, floorY + 4.4, 9),
+  ];
+
+  for (const position of lanternPositions) {
+    const lantern = createLantern(0xffc56b);
+    lantern.position.copy(position);
+    cave.add(lantern);
+
+    const lanternLight = new THREE.PointLight(0xffd27a, 7, 20, 2);
+    lanternLight.position.copy(position);
+    cave.add(lanternLight);
+  }
+
+  const overheadFill = new THREE.PointLight(0xc8d6ff, 3.2, 40, 2);
+  overheadFill.position.set(0, floorY + CAVE_HEIGHT - 4, 0);
+  cave.add(overheadFill);
 
   cave.visible = false;
   return cave;
