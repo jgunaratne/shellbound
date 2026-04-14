@@ -4,7 +4,6 @@ import { getTerrainHeight } from './Terrain';
 import pineTreeUrl from '../assets/models/pine_tree.glb';
 import treeUrl from '../assets/models/tree.glb';
 import rockUrl from '../assets/models/rock.glb';
-import mangoUrl from '../assets/models/mango.glb';
 
 export type Collider = { x: number; z: number; radius: number };
 type IndexedCollider = Collider & { _cellKey?: string };
@@ -120,21 +119,29 @@ export function populateEnvironment(scene: THREE.Scene) {
     loader.loadAsync(pineTreeUrl),
     loader.loadAsync(treeUrl),
     loader.loadAsync(rockUrl),
-    loader.loadAsync(mangoUrl),
   ])
-    .then(([pineTree, tree, rock, mango]) => {
+    .then(([pineTree, tree, rock]) => {
       const treeModels = [pineTree.scene, tree.scene];
       const baseRock = rock.scene;
-      const baseMango = mango.scene;
 
-      enableShadows([...treeModels, baseRock, baseMango]);
+      // Create highly performant low-poly mango representation
+      const mangoGeo = new THREE.DodecahedronGeometry(0.35);
+      const mangoMat = new THREE.MeshStandardMaterial({
+        color: 0xff9900,
+        roughness: 0.4,
+      });
+      const baseMango = new THREE.Mesh(mangoGeo, mangoMat);
+      baseMango.castShadow = true;
+      baseMango.receiveShadow = true;
+
+      enableShadows([...treeModels, baseRock]);
       scatterRocks(scene, baseRock, random);
       scatterTrees(scene, treeModels, random);
 
       mangos.length = 0; // Clear exactly before scattering to defeat any duplicate async race conditions
       scatterMangos(scene, baseMango, random);
 
-      console.log('Trees, rocks, and mangos loaded and scattered');
+      console.log('Trees, rocks, and low-poly mangos loaded and scattered');
     })
     .catch((error) => {
       console.error('Failed to load GLB assets:', error);
