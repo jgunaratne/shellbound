@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { getTerrainHeight } from './Terrain';
-import pineTreeUrl from '../assets/pine_tree.glb';
-import treeUrl from '../assets/tree.glb';
-import rockUrl from '../assets/rock.glb';
+import pineTreeUrl from '../assets/models/pine_tree.glb';
+import treeUrl from '../assets/models/tree.glb';
+import rockUrl from '../assets/models/rock.glb';
 
 type Collider = { x: number; z: number; radius: number };
 const ENVIRONMENT_SPREAD = 130;
