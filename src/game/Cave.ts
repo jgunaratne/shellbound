@@ -1,57 +1,56 @@
 import * as THREE from 'three';
+import { perlin2 } from './Terrain';
 
 // ─── Layout ──────────────────────────────────────────────────────
-//
-// The dungeon is defined as axis-aligned rectangles for rooms and
-// corridors. Walkability is checked against these rects with an
-// inset margin so the player can never clip into wall geometry.
 
 type Rect = { x1: number; z1: number; x2: number; z2: number };
 
 const FLOOR_Y = 0;
 const WALL_HEIGHT = 10;
 const WALL_THICKNESS = 3;
-const PLAYER_MARGIN = 1.8; // walkability inset so turtle stays clear of walls
+const PLAYER_MARGIN = 1.8;
+const FLOOR_NOISE_SCALE = 0.15;
+const FLOOR_NOISE_AMP = 0.45;
+const WALL_NOISE_SCALE = 0.25;
+const WALL_NOISE_AMP = 0.6;
+const FLOOR_SUBDIVS = 32; // subdivisions per floor/ceiling plane
+const WALL_SUBDIVS = 12;  // subdivisions per wall segment
 
 export const CAVE_SPAWN = new THREE.Vector3(0, FLOOR_Y, 0);
 
 // ── Rooms ────────────────────────────────────────────────────────
-// All coordinates are world-space (x, z). Rooms are large enough
-// for comfortable navigation.
 const ROOMS: Rect[] = [
-  // Hub – large central cavern
   { x1: -20, z1: -20, x2: 20, z2: 20 },
-  // East chamber
   { x1: 50, z1: -18, x2: 90, z2: 18 },
-  // North chamber
   { x1: -18, z1: -80, x2: 18, z2: -50 },
-  // West chamber
   { x1: -90, z1: -18, x2: -50, z2: 18 },
-  // South chamber
   { x1: -18, z1: 50, x2: 18, z2: 80 },
 ];
 
-// ── Corridors ────────────────────────────────────────────────────
+// ── Corridors (overlap 4 units into rooms) ───────────────────────
+const OVERLAP = 4;
 const CORRIDORS: Rect[] = [
-  // Hub → East
-  { x1: 20, z1: -5, x2: 50, z2: 5 },
-  // Hub → North
-  { x1: -5, z1: -50, x2: 5, z2: -20 },
-  // Hub → West
-  { x1: -50, z1: -5, x2: -20, z2: 5 },
-  // Hub → South
-  { x1: -5, z1: 20, x2: 5, z2: 50 },
+  { x1: 20 - OVERLAP, z1: -5, x2: 50 + OVERLAP, z2: 5 },
+  { x1: -5, z1: -50 + OVERLAP, x2: 5, z2: -20 + OVERLAP },
+  { x1: -50 - OVERLAP, z1: -5, x2: -20 + OVERLAP, z2: 5 },
+  { x1: -5, z1: 20 - OVERLAP, x2: 5, z2: 50 + OVERLAP },
 ];
 
 const ALL_WALKABLE: Rect[] = [...ROOMS, ...CORRIDORS];
 
-// ── Exported bounds (outer AABB for Player.clampToWorld) ─────────
 export const CAVE_BOUNDS = {
   minX: -92,
   maxX: 92,
   minZ: -82,
   maxZ: 82,
 };
+
+// ─── Cave ground height (exported for player grounding) ──────────
+export function getCaveFloorHeight(x: number, z: number): number {
+  const n1 = perlin2(x * FLOOR_NOISE_SCALE + 200, z * FLOOR_NOISE_SCALE + 200);
+  const n2 = perlin2(x * FLOOR_NOISE_SCALE * 2.3 + 50, z * FLOOR_NOISE_SCALE * 2.3 + 50);
+  return FLOOR_Y + (n1 * 0.7 + n2 * 0.3) * FLOOR_NOISE_AMP;
+}
 
 // ─── Walkability ─────────────────────────────────────────────────
 export function isInsideCaveLayout(x: number, z: number): boolean {
@@ -75,6 +74,7 @@ function stoneFloorMat() {
     roughness: 0.94,
     metalness: 0.05,
     side: THREE.DoubleSide,
+    flatShading: true,
   });
 }
 
@@ -94,45 +94,34 @@ function stoneCeilingMat() {
     roughness: 0.96,
     metalness: 0.02,
     side: THREE.DoubleSide,
-  });
-}
-
-function pillarMat() {
-  return new THREE.MeshStandardMaterial({
-    color: 0x6b5e4c,
-    roughness: 0.82,
-    metalness: 0.12,
     flatShading: true,
   });
 }
 
-// ─── Geometry helpers ────────────────────────────────────────────
-
-function addBox(
-  group: THREE.Group,
-  cx: number,
-  cy: number,
-  cz: number,
-  sx: number,
-  sy: number,
-  sz: number,
-  mat: THREE.Material,
-  castShadow = true,
-) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
-  mesh.position.set(cx, cy, cz);
-  mesh.castShadow = castShadow;
-  mesh.receiveShadow = true;
-  group.add(mesh);
-}
+// ─── Noise-displaced geometry builders ───────────────────────────
 
 function addFloor(group: THREE.Group, rect: Rect) {
   const w = rect.x2 - rect.x1;
   const d = rect.z2 - rect.z1;
   const cx = (rect.x1 + rect.x2) / 2;
   const cz = (rect.z1 + rect.z2) / 2;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), stoneFloorMat());
-  mesh.rotation.x = -Math.PI / 2;
+  const segsX = Math.max(4, Math.round(w / (w / FLOOR_SUBDIVS)));
+  const segsZ = Math.max(4, Math.round(d / (d / FLOOR_SUBDIVS)));
+
+  const geo = new THREE.PlaneGeometry(w, d, segsX, segsZ);
+  geo.rotateX(-Math.PI / 2);
+
+  // Displace Y with perlin noise
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const worldX = pos.getX(i) + cx;
+    const worldZ = pos.getZ(i) + cz;
+    pos.setY(i, getCaveFloorHeight(worldX, worldZ) - FLOOR_Y);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, stoneFloorMat());
   mesh.position.set(cx, FLOOR_Y - 0.01, cz);
   mesh.receiveShadow = true;
   group.add(mesh);
@@ -143,16 +132,83 @@ function addCeiling(group: THREE.Group, rect: Rect, height: number) {
   const d = rect.z2 - rect.z1;
   const cx = (rect.x1 + rect.x2) / 2;
   const cz = (rect.z1 + rect.z2) / 2;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), stoneCeilingMat());
-  mesh.rotation.x = Math.PI / 2;
+
+  const geo = new THREE.PlaneGeometry(w, d, FLOOR_SUBDIVS, FLOOR_SUBDIVS);
+  geo.rotateX(Math.PI / 2);
+
+  // Displace Y downward with noise (stalactite-like bumps)
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const worldX = pos.getX(i) + cx;
+    const worldZ = pos.getZ(i) + cz;
+    const n = perlin2(worldX * FLOOR_NOISE_SCALE * 1.5 + 300, worldZ * FLOOR_NOISE_SCALE * 1.5 + 300);
+    pos.setY(i, pos.getY(i) - Math.abs(n) * FLOOR_NOISE_AMP * 1.5);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, stoneCeilingMat());
   mesh.position.set(cx, FLOOR_Y + height, cz);
+  mesh.receiveShadow = true;
+  group.add(mesh);
+}
+
+/** Create a wall box with noise displacement on the outward-facing vertices */
+function addDisplacedWallBox(
+  group: THREE.Group,
+  cx: number,
+  cy: number,
+  cz: number,
+  sx: number,
+  sy: number,
+  sz: number,
+  outwardAxis: 'x' | 'z',
+  outwardSign: number,
+) {
+  const segsX = outwardAxis === 'z' ? Math.max(2, Math.round(sx)) : WALL_SUBDIVS;
+  const segsY = WALL_SUBDIVS;
+  const segsZ = outwardAxis === 'x' ? Math.max(2, Math.round(sz)) : WALL_SUBDIVS;
+
+  const geo = new THREE.BoxGeometry(sx, sy, sz, segsX, segsY, segsZ);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+
+  for (let i = 0; i < pos.count; i++) {
+    const lx = pos.getX(i);
+    const ly = pos.getY(i);
+    const lz = pos.getZ(i);
+
+    // Only displace vertices on the inward face (facing the room interior)
+    const isInwardFace = outwardAxis === 'x'
+      ? lx * outwardSign < 0  // inward = opposite of outward
+      : lz * outwardSign < 0;
+
+    if (isInwardFace) {
+      const worldX = lx + cx;
+      const worldY = ly + cy;
+      const worldZ = lz + cz;
+      const n = perlin2(
+        (outwardAxis === 'x' ? worldZ : worldX) * WALL_NOISE_SCALE + 100,
+        worldY * WALL_NOISE_SCALE + 100,
+      );
+      if (outwardAxis === 'x') {
+        pos.setX(i, lx - n * WALL_NOISE_AMP * outwardSign);
+      } else {
+        pos.setZ(i, lz - n * WALL_NOISE_AMP * outwardSign);
+      }
+    }
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, stoneWallMat());
+  mesh.position.set(cx, cy, cz);
+  mesh.castShadow = true;
   mesh.receiveShadow = true;
   group.add(mesh);
 }
 
 // ─── Wall builder with automatic door openings ───────────────────
 
-/** Check if a wall segment along an axis overlaps with any corridor opening */
 function getOpeningsOnEdge(
   edgeAxis: 'x' | 'z',
   edgePos: number,
@@ -160,19 +216,15 @@ function getOpeningsOnEdge(
   rangeMax: number,
 ): { min: number; max: number }[] {
   const openings: { min: number; max: number }[] = [];
-  const tolerance = 0.5;
-
   for (const c of CORRIDORS) {
     if (edgeAxis === 'x') {
-      // wall runs along X, check if corridor crosses at this Z position
-      if (Math.abs(c.z1 - edgePos) < tolerance || Math.abs(c.z2 - edgePos) < tolerance) {
+      if (c.z1 <= edgePos && c.z2 >= edgePos) {
         const oMin = Math.max(c.x1, rangeMin);
         const oMax = Math.min(c.x2, rangeMax);
         if (oMax > oMin) openings.push({ min: oMin, max: oMax });
       }
     } else {
-      // wall runs along Z, check if corridor crosses at this X position
-      if (Math.abs(c.x1 - edgePos) < tolerance || Math.abs(c.x2 - edgePos) < tolerance) {
+      if (c.x1 <= edgePos && c.x2 >= edgePos) {
         const oMin = Math.max(c.z1, rangeMin);
         const oMax = Math.min(c.z2, rangeMax);
         if (oMax > oMin) openings.push({ min: oMin, max: oMax });
@@ -189,10 +241,9 @@ function buildWallSegments(
   rangeMin: number,
   rangeMax: number,
   height: number,
+  outwardSign: number,
 ) {
   const openings = getOpeningsOnEdge(edgeAxis, edgePos, rangeMin, rangeMax);
-  const mat = stoneWallMat();
-
   const segments: { start: number; end: number }[] = [];
   let cursor = rangeMin;
   for (const op of openings) {
@@ -205,119 +256,79 @@ function buildWallSegments(
     const len = seg.end - seg.start;
     const mid = (seg.start + seg.end) / 2;
     if (edgeAxis === 'x') {
-      addBox(group, mid, FLOOR_Y + height / 2, edgePos, len, height, WALL_THICKNESS, mat);
+      addDisplacedWallBox(group, mid, FLOOR_Y + height / 2, edgePos, len, height, WALL_THICKNESS, 'z', outwardSign);
     } else {
-      addBox(group, edgePos, FLOOR_Y + height / 2, mid, WALL_THICKNESS, height, len, mat);
+      addDisplacedWallBox(group, edgePos, FLOOR_Y + height / 2, mid, WALL_THICKNESS, height, len, 'x', outwardSign);
     }
   }
 }
 
 function addRoomWalls(group: THREE.Group, rect: Rect, height: number) {
-  // North wall (z = z1)
-  buildWallSegments(group, 'x', rect.z1, rect.x1, rect.x2, height);
-  // South wall (z = z2)
-  buildWallSegments(group, 'x', rect.z2, rect.x1, rect.x2, height);
-  // West wall (x = x1)
-  buildWallSegments(group, 'z', rect.x1, rect.z1, rect.z2, height);
-  // East wall (x = x2)
-  buildWallSegments(group, 'z', rect.x2, rect.z1, rect.z2, height);
+  buildWallSegments(group, 'x', rect.z1, rect.x1, rect.x2, height, -1); // North
+  buildWallSegments(group, 'x', rect.z2, rect.x1, rect.x2, height, 1);  // South
+  buildWallSegments(group, 'z', rect.x1, rect.z1, rect.z2, height, -1); // West
+  buildWallSegments(group, 'z', rect.x2, rect.z1, rect.z2, height, 1);  // East
 }
 
 function addCorridorWalls(group: THREE.Group, rect: Rect, height: number) {
   const w = rect.x2 - rect.x1;
   const d = rect.z2 - rect.z1;
-  const mat = stoneWallMat();
 
   if (w > d) {
-    // Horizontal corridor – walls on north and south
-    addBox(group, (rect.x1 + rect.x2) / 2, FLOOR_Y + height / 2, rect.z1, w, height, WALL_THICKNESS, mat);
-    addBox(group, (rect.x1 + rect.x2) / 2, FLOOR_Y + height / 2, rect.z2, w, height, WALL_THICKNESS, mat);
+    addDisplacedWallBox(group, (rect.x1 + rect.x2) / 2, FLOOR_Y + height / 2, rect.z1, w, height, WALL_THICKNESS, 'z', -1);
+    addDisplacedWallBox(group, (rect.x1 + rect.x2) / 2, FLOOR_Y + height / 2, rect.z2, w, height, WALL_THICKNESS, 'z', 1);
   } else {
-    // Vertical corridor – walls on east and west
-    addBox(group, rect.x1, FLOOR_Y + height / 2, (rect.z1 + rect.z2) / 2, WALL_THICKNESS, height, d, mat);
-    addBox(group, rect.x2, FLOOR_Y + height / 2, (rect.z1 + rect.z2) / 2, WALL_THICKNESS, height, d, mat);
+    addDisplacedWallBox(group, rect.x1, FLOOR_Y + height / 2, (rect.z1 + rect.z2) / 2, WALL_THICKNESS, height, d, 'x', -1);
+    addDisplacedWallBox(group, rect.x2, FLOOR_Y + height / 2, (rect.z1 + rect.z2) / 2, WALL_THICKNESS, height, d, 'x', 1);
   }
 }
 
-// ─── Decorations ─────────────────────────────────────────────────
+// ─── Wall-mounted lanterns ───────────────────────────────────────
 
-function addPillar(group: THREE.Group, x: number, z: number, height: number) {
-  const r = 0.7;
-  const mat = pillarMat();
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.2, height, 8), mat);
-  shaft.position.set(x, FLOOR_Y + height / 2, z);
-  shaft.castShadow = true;
-  shaft.receiveShadow = true;
-  group.add(shaft);
+function addWallLantern(group: THREE.Group, x: number, z: number) {
+  const bracketMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.6, metalness: 0.7 });
+  const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.0, 6), bracketMat);
+  bracket.rotation.z = Math.PI / 2;
+  bracket.position.set(x, FLOOR_Y + 4.5, z);
+  group.add(bracket);
 
-  const capGeo = new THREE.CylinderGeometry(r * 1.6, r * 1.3, 0.5, 8);
-  const cap = new THREE.Mesh(capGeo, mat);
-  cap.position.set(x, FLOOR_Y + height, z);
-  group.add(cap);
-  const base = new THREE.Mesh(capGeo, mat);
-  base.position.set(x, FLOOR_Y + 0.25, z);
-  group.add(base);
-}
-
-function addTorch(group: THREE.Group, x: number, z: number) {
-  const flameMat = new THREE.MeshStandardMaterial({
-    color: 0xffa040,
-    emissive: 0xff8020,
-    emissiveIntensity: 3.5,
-    roughness: 0.3,
+  const lanternMat = new THREE.MeshStandardMaterial({
+    color: 0xffcc66,
+    emissive: 0xff9922,
+    emissiveIntensity: 2.8,
+    roughness: 0.35,
+    metalness: 0.1,
   });
-  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), flameMat);
-  flame.position.set(x, FLOOR_Y + 3.5, z);
-  group.add(flame);
+  const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 10), lanternMat);
+  lantern.position.set(x, FLOOR_Y + 4.5, z);
+  group.add(lantern);
 
-  const light = new THREE.PointLight(0xffaa44, 8, 35, 1.6);
-  light.position.set(x, FLOOR_Y + 4, z);
+  const light = new THREE.PointLight(0xffaa44, 6, 30, 1.6);
+  light.position.set(x, FLOOR_Y + 5, z);
   group.add(light);
 }
 
-function decorateHub(group: THREE.Group, rect: Rect) {
+// ─── Room decorations ────────────────────────────────────────────
+
+function decorateRoom(group: THREE.Group, rect: Rect) {
   const cx = (rect.x1 + rect.x2) / 2;
   const cz = (rect.z1 + rect.z2) / 2;
-  const inset = 6;
+  const inset = 2;
 
-  // Corner pillars
-  addPillar(group, rect.x1 + inset, rect.z1 + inset, WALL_HEIGHT);
-  addPillar(group, rect.x2 - inset, rect.z1 + inset, WALL_HEIGHT);
-  addPillar(group, rect.x1 + inset, rect.z2 - inset, WALL_HEIGHT);
-  addPillar(group, rect.x2 - inset, rect.z2 - inset, WALL_HEIGHT);
-
-  // Central fire pit
-  addTorch(group, cx - 2, cz - 2);
-  addTorch(group, cx + 2, cz + 2);
-  addTorch(group, cx - 2, cz + 2);
-  addTorch(group, cx + 2, cz - 2);
-
-  // Wall torches
-  addTorch(group, rect.x1 + 3, cz);
-  addTorch(group, rect.x2 - 3, cz);
-  addTorch(group, cx, rect.z1 + 3);
-  addTorch(group, cx, rect.z2 - 3);
-}
-
-function decorateSideRoom(group: THREE.Group, rect: Rect) {
-  const cx = (rect.x1 + rect.x2) / 2;
-  const cz = (rect.z1 + rect.z2) / 2;
-  const inset = 5;
-
-  // Two pillars
-  addPillar(group, rect.x1 + inset, cz, WALL_HEIGHT);
-  addPillar(group, rect.x2 - inset, cz, WALL_HEIGHT);
-
-  // Torches along walls
-  addTorch(group, rect.x1 + 3, rect.z1 + 3);
-  addTorch(group, rect.x2 - 3, rect.z2 - 3);
-  addTorch(group, cx, cz);
+  addWallLantern(group, cx - 8, rect.z1 + inset);
+  addWallLantern(group, cx + 8, rect.z1 + inset);
+  addWallLantern(group, cx - 8, rect.z2 - inset);
+  addWallLantern(group, cx + 8, rect.z2 - inset);
+  addWallLantern(group, rect.x1 + inset, cz - 6);
+  addWallLantern(group, rect.x1 + inset, cz + 6);
+  addWallLantern(group, rect.x2 - inset, cz - 6);
+  addWallLantern(group, rect.x2 - inset, cz + 6);
 }
 
 function decorateCorridor(group: THREE.Group, rect: Rect) {
   const cx = (rect.x1 + rect.x2) / 2;
   const cz = (rect.z1 + rect.z2) / 2;
-  addTorch(group, cx, cz);
+  addWallLantern(group, cx, cz);
 }
 
 // ─── Global lighting ─────────────────────────────────────────────
@@ -337,21 +348,13 @@ export function createCaveScene(): THREE.Group {
 
   const corridorHeight = WALL_HEIGHT * 0.8;
 
-  // Rooms
-  for (let i = 0; i < ROOMS.length; i++) {
-    const room = ROOMS[i];
+  for (const room of ROOMS) {
     addFloor(cave, room);
     addCeiling(cave, room, WALL_HEIGHT);
     addRoomWalls(cave, room, WALL_HEIGHT);
-
-    if (i === 0) {
-      decorateHub(cave, room);
-    } else {
-      decorateSideRoom(cave, room);
-    }
+    decorateRoom(cave, room);
   }
 
-  // Corridors
   for (const corridor of CORRIDORS) {
     addFloor(cave, corridor);
     addCeiling(cave, corridor, corridorHeight);

@@ -12,7 +12,7 @@ import { populateEnvironment } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NpcTurtle';
 import { Minimap } from './Minimap';
-import { CAVE_BOUNDS, CAVE_SPAWN, createCaveScene, isInsideCaveLayout } from './Cave';
+import { CAVE_BOUNDS, CAVE_SPAWN, createCaveScene, getCaveFloorHeight, isInsideCaveLayout } from './Cave';
 import skyUrl from '../assets/sky.png';
 import skyAfternoonUrl from '../assets/sky_afternoon.png';
 import skyNightUrl from '../assets/sky_night.png';
@@ -644,8 +644,8 @@ export class Game {
     return getTerrainHeight(x, z) > -1.9;
   };
 
-  private readonly getCaveGroundHeight = () => {
-    return CAVE_SPAWN.y;
+  private readonly getCaveGroundHeight = (x: number, z: number) => {
+    return getCaveFloorHeight(x, z);
   };
 
   private readonly isCaveWalkable = (x: number, z: number) => {
