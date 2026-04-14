@@ -113,6 +113,8 @@ export class Game {
   private animId = 0;
   private lastTime = 0;
 
+  public onMangoCollected?: () => void;
+
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = this.createRenderer(canvas);
     this.scene = this.createScene();
@@ -128,6 +130,11 @@ export class Game {
     this.scene.add(this.grass.mesh);
 
     this.player = new Player(this.scene);
+    this.player.onMangoCollected = () => {
+      if (this.onMangoCollected) {
+        this.onMangoCollected();
+      }
+    };
     this.npcTurtles = new NPCTurtleManager(this.scene);
     this.minimap = new Minimap();
     this.tpCamera = new ThirdPersonCamera();
