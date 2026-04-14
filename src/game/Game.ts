@@ -149,12 +149,15 @@ export class Game {
     window.addEventListener('resize', this.onResize);
   }
 
+  private isDisposed = false;
+
   start() {
     this.lastTime = performance.now();
     this.loop(this.lastTime);
   }
 
   dispose() {
+    this.isDisposed = true;
     cancelAnimationFrame(this.animId);
     this.input.dispose();
     this.minimap.dispose();
@@ -492,6 +495,7 @@ export class Game {
   }
 
   private readonly loop = (time: number) => {
+    if (this.isDisposed) return;
     this.animId = requestAnimationFrame(this.loop);
     const dt = Math.min((time - this.lastTime) / 1000, 0.05);
     const timeSeconds = time / 1000;
