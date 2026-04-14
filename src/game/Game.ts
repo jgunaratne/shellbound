@@ -264,17 +264,17 @@ export class Game {
   }
 
   private createCaveLighting() {
-    const ambientLight = new THREE.AmbientLight(0x9a8b74, 1.9);
+    const ambientLight = new THREE.AmbientLight(0x9a8b74, 1.2);
     this.caveScene.add(ambientLight);
 
-    const caveLight = new THREE.PointLight(0xffb066, 8.5, 40, 2);
-    caveLight.position.set(-3, CAVE_SPAWN.y + 3.8, -3);
+    const caveLight = new THREE.PointLight(0xffb066, 10, 60, 1.8);
+    caveLight.position.set(0, 6, 0);
     caveLight.castShadow = true;
     caveLight.shadow.mapSize.set(1024, 1024);
     this.caveScene.add(caveLight);
 
-    const caveFillLight = new THREE.PointLight(0x7ea6ff, 3.4, 36, 2);
-    caveFillLight.position.set(6, CAVE_SPAWN.y + 4.5, 6);
+    const caveFillLight = new THREE.PointLight(0x7ea6ff, 4, 50, 2);
+    caveFillLight.position.set(6, 5, 6);
     this.caveScene.add(caveFillLight);
 
     return { ambientLight, caveLight, caveFillLight };
