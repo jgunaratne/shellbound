@@ -12,7 +12,7 @@ import { populateEnvironment } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NpcTurtle';
 import { Minimap } from './Minimap';
-import { CAVE_BOUNDS, CAVE_SPAWN, createCaveScene } from './Cave';
+import { CAVE_BOUNDS, CAVE_SPAWN, createCaveScene, isInsideCaveLayout } from './Cave';
 import skyUrl from '../assets/sky.png';
 import skyAfternoonUrl from '../assets/sky_afternoon.png';
 import skyNightUrl from '../assets/sky_night.png';
@@ -149,7 +149,7 @@ export class Game {
     this.outdoorWorld = new THREE.Group();
     this.outdoorWorld.name = 'outdoor_world';
     this.outdoorScene.add(this.outdoorWorld);
-    this.caveWorld = createCaveScene(CAVE_SPAWN.y);
+    this.caveWorld = createCaveScene();
     this.caveScene.add(this.caveWorld);
     this.createSkydome(PRESETS[this.currentPreset].skyUrl);
 
@@ -647,12 +647,7 @@ export class Game {
   };
 
   private readonly isCaveWalkable = (x: number, z: number) => {
-    return (
-      x >= CAVE_BOUNDS.minX &&
-      x <= CAVE_BOUNDS.maxX &&
-      z >= CAVE_BOUNDS.minZ &&
-      z <= CAVE_BOUNDS.maxZ
-    );
+    return isInsideCaveLayout(x, z);
   };
 
   private updatePostProcessingScene() {
