@@ -206,6 +206,15 @@ function scatterTrees(
   }
 }
 
+export const mangos: THREE.Object3D[] = [];
+
+export function collectMango(index: number, scene: THREE.Scene) {
+  const mango = mangos[index];
+  if (!mango) return;
+  scene.remove(mango);
+  mangos.splice(index, 1);
+}
+
 function scatterMangos(
   scene: THREE.Scene,
   baseMango: THREE.Object3D,
@@ -231,6 +240,7 @@ function scatterMangos(
     mango.rotation.z = (random() - 0.5) * 0.5;
 
     scene.add(mango);
+    mangos.push(mango);
   }
 }
 

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { getTerrainHeight } from './Terrain';
-import { queryNearbyColliders } from './Environment';
+import { queryNearbyColliders, mangos, collectMango } from './Environment';
 import type { InputManager } from './InputManager';
 import turtleWalkUrl from '../assets/models/turtle_walking.glb';
 import turtleRunUrl from '../assets/models/turtle_running.glb';
@@ -38,7 +38,11 @@ export class Player {
   private verticalVelocity = 0;
   private groundY = 0;
 
+  public onMangoCollected?: () => void;
+  private scene: THREE.Scene;
+
   constructor(scene: THREE.Scene) {
+    this.scene = scene;
     this.group = new THREE.Group();
     this.group.position.set(0, getTerrainHeight(0, 0), 0);
     scene.add(this.group);
@@ -62,6 +66,24 @@ export class Player {
 
     this.updateVerticalPosition(dt);
     this.updateAnimationState(dt, movement.isMoving, movement.isRunning);
+    this.checkMangoCollection();
+  }
+
+  private checkMangoCollection() {
+    for (let i = mangos.length - 1; i >= 0; i--) {
+      const m = mangos[i];
+      const dist = Math.hypot(
+        this.group.position.x - m.position.x,
+        this.group.position.z - m.position.z,
+      );
+
+      if (dist < 1.5) {
+        collectMango(i, this.scene);
+        if (this.onMangoCollected) {
+          this.onMangoCollected();
+        }
+      }
+    }
   }
 
   private async loadModel() {

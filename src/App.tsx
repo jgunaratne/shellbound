@@ -5,6 +5,7 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<Game | null>(null);
   const [locked, setLocked] = useState(false);
+  const [mangoCount, setMangoCount] = useState(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -12,6 +13,11 @@ export default function App() {
 
     const game = new Game(canvas);
     gameRef.current = game;
+
+    game.onMangoCollected = () => {
+      setMangoCount((count) => count + 1);
+    };
+
     game.start();
 
     const onLockChange = () => {
@@ -30,6 +36,9 @@ export default function App() {
       <canvas ref={canvasRef} style={{ display: 'block', width: '100vw', height: '100vh' }} />
 
       <div className="hud">
+        <p style={{ fontSize: '1.2em', fontWeight: 'bold', color: '#ffbb00', marginBottom: 8 }}>
+          🥭 Mangos Collected: {mangoCount}
+        </p>
         <p>WASD — Move</p>
         <p>Mouse — Look {locked ? '(locked)' : ''}</p>
         {!locked && <p style={{ color: '#ffdd88', marginTop: 6 }}>Click to capture mouse</p>}
