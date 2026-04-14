@@ -102,6 +102,7 @@ export class Game {
   private readonly ambientLight: THREE.AmbientLight;
   private readonly fillLight: THREE.DirectionalLight;
   private currentPreset: PresetId = '1';
+  private targetPreset: PresetId = '1';
   private qualityTier: QualityTier = 0;
   private basePixelRatio = 1;
   private smoothedFrameTimeMs = TARGET_FRAME_TIME_MS;
@@ -139,6 +140,9 @@ export class Game {
     this.minimap = new Minimap();
     this.tpCamera = new ThirdPersonCamera();
     this.input = new InputManager(canvas);
+
+    // Apply initial preset instantly
+    this.applyPreset(this.currentPreset, true);
 
     const postProcessing = this.createPostProcessing();
     this.composer = postProcessing.composer;
@@ -422,38 +426,76 @@ export class Game {
     return 0.5 - 0.5 * Math.cos(edgeWeight * Math.PI);
   }
 
-  private applyPreset(presetId: PresetId) {
+  private applyPreset(presetId: PresetId, instant = false) {
+    this.targetPreset = presetId;
     const preset = PRESETS[presetId];
 
-    this.sun.color.setHex(preset.sun.color);
-    this.sun.intensity = preset.sun.intensity;
-    this.sun.position.set(...preset.sun.position);
-
-    this.ambientLight.color.setHex(preset.ambient.color);
-    this.ambientLight.intensity = preset.ambient.intensity;
-
-    this.fillLight.color.setHex(preset.fill.color);
-    this.fillLight.intensity = preset.fill.intensity;
-
-    this.setFogColor(preset.fogColor);
-    this.skyCapMaterial?.color.setHex(preset.skyCapColor);
-    this.renderer.toneMappingExposure = preset.exposure;
-
-    this.updateWaterColors(
-      preset.water.baseColor,
-      preset.water.highlightColor,
-      preset.fogColor,
-    );
-
     this.loadSkyTexture(preset.skyUrl, (texture) => {
-      if (!this.skyMaterial) {
-        return;
-      }
-
+      if (!this.skyMaterial) return;
       this.skyMaterial.map?.dispose();
       this.skyMaterial.map = texture;
       this.skyMaterial.needsUpdate = true;
     });
+
+    if (instant) {
+      this.sun.color.setHex(preset.sun.color);
+      this.sun.intensity = preset.sun.intensity;
+      this.sun.position.set(...preset.sun.position);
+
+      this.ambientLight.color.setHex(preset.ambient.color);
+      this.ambientLight.intensity = preset.ambient.intensity;
+
+      this.fillLight.color.setHex(preset.fill.color);
+      this.fillLight.intensity = preset.fill.intensity;
+
+      this.setFogColor(preset.fogColor);
+      if (this.skyCapMaterial) {
+        this.skyCapMaterial.color.setHex(preset.skyCapColor);
+      }
+
+      this.renderer.toneMappingExposure = preset.exposure;
+      this.updateWaterColors(
+        preset.water.baseColor,
+        preset.water.highlightColor,
+        preset.fogColor,
+      );
+    }
+  }
+
+  private updatePresetLerp(dt: number) {
+    const preset = PRESETS[this.targetPreset];
+    const speed = dt * 2.0;
+
+    const tempColor = new THREE.Color();
+    const tempPos = new THREE.Vector3();
+
+    this.sun.color.lerp(tempColor.setHex(preset.sun.color), speed);
+    this.sun.intensity += (preset.sun.intensity - this.sun.intensity) * speed;
+    tempPos.set(...preset.sun.position);
+    this.sun.position.lerp(tempPos, speed);
+
+    this.ambientLight.color.lerp(tempColor.setHex(preset.ambient.color), speed);
+    this.ambientLight.intensity += (preset.ambient.intensity - this.ambientLight.intensity) * speed;
+
+    this.fillLight.color.lerp(tempColor.setHex(preset.fill.color), speed);
+    this.fillLight.intensity += (preset.fill.intensity - this.fillLight.intensity) * speed;
+
+    const fogTarget = tempColor.setHex(preset.fogColor);
+    (this.scene.fog as THREE.FogExp2).color.lerp(fogTarget, speed);
+    (this.scene.background as THREE.Color).lerp(fogTarget, speed);
+
+    if (this.skyCapMaterial) {
+      this.skyCapMaterial.color.lerp(tempColor.setHex(preset.skyCapColor), speed);
+    }
+
+    this.renderer.toneMappingExposure += (preset.exposure - this.renderer.toneMappingExposure) * speed;
+
+    for (const material of [waterMaterial, lakeMaterial]) {
+      if (!material?.uniforms) continue;
+      material.uniforms.uBaseColor.value.lerp(tempColor.setRGB(...preset.water.baseColor), speed);
+      material.uniforms.uHighlightColor.value.lerp(tempColor.setRGB(...preset.water.highlightColor), speed);
+      material.uniforms.uFogColor.value.lerp(tempColor.setHex(preset.fogColor), speed);
+    }
   }
 
   private setFogColor(color: number) {
@@ -516,6 +558,7 @@ export class Game {
     this.updateWaterTime(timeSeconds);
     this.grass.update(timeSeconds);
     this.updateAdaptiveQuality(dt);
+    this.updatePresetLerp(dt);
     this.composer.render();
   };
 
