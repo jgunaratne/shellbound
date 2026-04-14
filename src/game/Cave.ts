@@ -181,52 +181,85 @@ function addRoomCeiling(group: THREE.Group, room: CaveRoom) {
 }
 
 function addRoomWalls(group: THREE.Group, room: CaveRoom) {
-  // Build a cylinder wall, but remove faces where corridors connect
+  const roomIndex = CAVE_ROOMS.indexOf(room);
   const heightSegs = 8;
+
+  // Collect the angular ranges that need to be open (where corridors connect)
+  const openings: { center: number; halfSpan: number }[] = [];
+  for (const c of CAVE_CORRIDORS) {
+    let otherRoom: CaveRoom | null = null;
+    if (c.from === roomIndex) otherRoom = CAVE_ROOMS[c.to];
+    else if (c.to === roomIndex) otherRoom = CAVE_ROOMS[c.from];
+    if (!otherRoom) continue;
+
+    const corridorAngle = Math.atan2(otherRoom.cz - room.cz, otherRoom.cx - room.cx);
+    const halfSpan = Math.atan2(c.halfWidth * 1.4, room.radius);
+    openings.push({ center: corridorAngle, halfSpan });
+  }
+
+  // Build wall arc segments between the openings
+  // Convert openings to sorted [start, end] ranges in [0, 2PI]
+  const ranges: { start: number; end: number }[] = openings.map(o => {
+    let s = o.center - o.halfSpan;
+    let e = o.center + o.halfSpan;
+    // Normalize to [0, 2PI]
+    while (s < 0) s += Math.PI * 2;
+    while (e < 0) e += Math.PI * 2;
+    while (s >= Math.PI * 2) s -= Math.PI * 2;
+    while (e >= Math.PI * 2) e -= Math.PI * 2;
+    return { start: s, end: e };
+  });
+
+  // Sort by start angle
+  ranges.sort((a, b) => a.start - b.start);
+
+  // Build solid arc segments in the gaps between openings
+  if (ranges.length === 0) {
+    // No openings — full cylinder
+    addWallArc(group, room, 0, Math.PI * 2, heightSegs);
+  } else {
+    // Walk around the circle building arcs in the gaps
+    for (let i = 0; i < ranges.length; i++) {
+      const gapStart = ranges[i].end;
+      const gapEnd = ranges[(i + 1) % ranges.length].start;
+
+      let arcLength = gapEnd - gapStart;
+      if (arcLength <= 0) arcLength += Math.PI * 2;
+      if (arcLength < 0.05) continue; // skip tiny slivers
+
+      addWallArc(group, room, gapStart, arcLength, heightSegs);
+    }
+  }
+}
+
+function addWallArc(
+  group: THREE.Group,
+  room: CaveRoom,
+  thetaStart: number,
+  thetaLength: number,
+  heightSegs: number,
+) {
+  const arcSegs = Math.max(4, Math.round((thetaLength / (Math.PI * 2)) * WALL_SEGMENTS));
+
   const geo = new THREE.CylinderGeometry(
-    room.radius, room.radius, WALL_HEIGHT, WALL_SEGMENTS, heightSegs, true,
+    room.radius, room.radius, WALL_HEIGHT, arcSegs, heightSegs, true,
+    thetaStart, thetaLength,
   );
 
+  // Apply Perlin noise displacement inward
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     const lx = pos.getX(i);
     const ly = pos.getY(i);
     const lz = pos.getZ(i);
 
-    // Perlin displacement outward (push inward for cave feel)
     const angle = Math.atan2(lz, lx);
     const n = perlin2(angle * 3 + 100, ly * 0.3 + 100);
     const disp = n * WALL_NOISE_AMP;
-    // Inward displacement
     const nx = Math.cos(angle);
     const nz = Math.sin(angle);
     pos.setX(i, lx - nx * disp);
     pos.setZ(i, lz - nz * disp);
-
-    // Remove wall geometry where corridors connect by pushing vertices
-    // outward to make openings
-    for (const c of CAVE_CORRIDORS) {
-      let otherRoom: CaveRoom | null = null;
-      if (c.from === CAVE_ROOMS.indexOf(room)) otherRoom = CAVE_ROOMS[c.to];
-      else if (c.to === CAVE_ROOMS.indexOf(room)) otherRoom = CAVE_ROOMS[c.from];
-      if (!otherRoom) continue;
-
-      const corridorAngle = Math.atan2(otherRoom.cz - room.cz, otherRoom.cx - room.cx);
-      const vertAngle = Math.atan2(lz, lx);
-
-      // Angular width of the corridor opening
-      const openingAngle = Math.atan2(c.halfWidth, room.radius) * 1.3;
-      let angleDiff = vertAngle - corridorAngle;
-      // Normalize to [-PI, PI]
-      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-
-      if (Math.abs(angleDiff) < openingAngle) {
-        // Push this vertex way out so the face becomes invisible/degenerate
-        pos.setX(i, lx + nx * 20);
-        pos.setZ(i, lz + nz * 20);
-      }
-    }
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();
