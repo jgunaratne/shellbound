@@ -439,26 +439,25 @@ const WATER_VERTEX = `
 
 function makeWaterFragmentShader(alphaExpr: string, applyFog: boolean): string {
   const fogCode = applyFog ? `
-        // Exponential fog matching scene FogExp2(0xc9d8f0, 0.0025)
         float fogDensity = 0.0025;
         float fogFactor = exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
         fogFactor = clamp(fogFactor, 0.0, 1.0);
-        vec3 fogColor = vec3(0.788, 0.847, 0.941); // 0xc9d8f0
-        finalColor = mix(fogColor, finalColor, fogFactor);
+        finalColor = mix(uFogColor, finalColor, fogFactor);
   ` : '';
 
   return `
     uniform float uTime;
+    uniform vec3 uBaseColor;
+    uniform vec3 uHighlightColor;
+    uniform vec3 uFogColor;
     varying vec2 vUv;
     varying float vFogDepth;
     ${WATER_NOISE_GLSL}
     void main() {
         vec2 uv = vUv * 12.0;
         float n = nestedNoise(uv);
-        vec3 baseBlue = vec3(0.01, 0.04, 0.12);
-        vec3 highlightBlue = vec3(0.05, 0.15, 0.30);
         float sharpNoise = pow(n, 2.5);
-        vec3 finalColor = mix(baseBlue, highlightBlue, sharpNoise);
+        vec3 finalColor = mix(uBaseColor, uHighlightColor, sharpNoise);
         ${fogCode}
         gl_FragColor = vec4(finalColor, ${alphaExpr});
     }
@@ -507,7 +506,12 @@ export function createWater(scene: THREE.Scene) {
   oceanGeo.rotateX(-Math.PI / 2);
 
   waterMaterial = new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0.0 } },
+    uniforms: {
+      uTime: { value: 0.0 },
+      uBaseColor: { value: new THREE.Color(0.01, 0.04, 0.12) },
+      uHighlightColor: { value: new THREE.Color(0.05, 0.15, 0.30) },
+      uFogColor: { value: new THREE.Color(0xc9d8f0) },
+    },
     vertexShader: WATER_VERTEX,
     fragmentShader: makeWaterFragmentShader('1.0', true),
     transparent: false,
@@ -523,7 +527,12 @@ export function createWater(scene: THREE.Scene) {
   lakeGeo.rotateX(-Math.PI / 2);
 
   lakeMaterial = new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0.0 } },
+    uniforms: {
+      uTime: { value: 0.0 },
+      uBaseColor: { value: new THREE.Color(0.01, 0.04, 0.12) },
+      uHighlightColor: { value: new THREE.Color(0.05, 0.15, 0.30) },
+      uFogColor: { value: new THREE.Color(0xc9d8f0) },
+    },
     vertexShader: WATER_VERTEX,
     fragmentShader: makeWaterFragmentShader('0.75', false),
     transparent: true,
