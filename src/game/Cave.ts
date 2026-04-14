@@ -32,6 +32,8 @@ function createRockGeometry(radius: number, height: number) {
 function createRockMaterial(color: number) {
   return new THREE.MeshStandardMaterial({
     color,
+    emissive: new THREE.Color(color).multiplyScalar(0.08),
+    side: THREE.DoubleSide,
     roughness: 0.96,
     metalness: 0.02,
     flatShading: true,
@@ -59,6 +61,8 @@ export function createCaveScene(floorY: number): THREE.Group {
     new THREE.CircleGeometry(CAVE_RADIUS, 32),
     new THREE.MeshStandardMaterial({
       color: 0x6a5b47,
+      emissive: 0x17120e,
+      side: THREE.DoubleSide,
       roughness: 0.98,
       metalness: 0.02,
     }),
@@ -73,6 +77,7 @@ export function createCaveScene(floorY: number): THREE.Group {
     new THREE.CylinderGeometry(CAVE_RADIUS, CAVE_RADIUS + 2, CAVE_HEIGHT, 18, 5, true),
     wallMaterial,
   );
+  (wall.material as THREE.MeshStandardMaterial).side = THREE.BackSide;
   wall.position.y = floorY + CAVE_HEIGHT * 0.5 - 1;
   wall.castShadow = true;
   wall.receiveShadow = true;
@@ -82,6 +87,7 @@ export function createCaveScene(floorY: number): THREE.Group {
     new THREE.SphereGeometry(CAVE_RADIUS * 0.92, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2.2),
     createRockMaterial(0x3a342f),
   );
+  (ceiling.material as THREE.MeshStandardMaterial).side = THREE.BackSide;
   ceiling.position.y = floorY + CAVE_HEIGHT - 2;
   ceiling.scale.y = 0.65;
   ceiling.castShadow = true;
@@ -157,9 +163,13 @@ export function createCaveScene(floorY: number): THREE.Group {
     cave.add(lanternLight);
   }
 
-  const overheadFill = new THREE.PointLight(0xc8d6ff, 3.2, 40, 2);
+  const overheadFill = new THREE.PointLight(0xc8d6ff, 5.5, 52, 2);
   overheadFill.position.set(0, floorY + CAVE_HEIGHT - 4, 0);
   cave.add(overheadFill);
+
+  const broadFill = new THREE.HemisphereLight(0xd8d6cf, 0x5b4734, 1.8);
+  broadFill.position.set(0, floorY + CAVE_HEIGHT, 0);
+  cave.add(broadFill);
 
   cave.visible = false;
   return cave;
