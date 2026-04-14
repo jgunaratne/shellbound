@@ -216,7 +216,17 @@ export function collectMango(index: number, scene: THREE.Scene): boolean {
   if (!mango || (mango as any)._collected) return false;
   (mango as any)._collected = true;
 
-  scene.remove(mango);
+  mango.visible = false;
+  mango.traverse((child) => {
+    child.visible = false;
+  });
+
+  if (mango.parent) {
+    mango.parent.remove(mango);
+  } else {
+    scene.remove(mango);
+  }
+
   mangos.splice(index, 1);
   return true;
 }
