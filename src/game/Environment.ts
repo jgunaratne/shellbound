@@ -8,6 +8,7 @@ import mangoUrl from '../assets/models/mango.glb';
 
 export type Collider = { x: number; z: number; radius: number };
 type IndexedCollider = Collider & { _cellKey?: string };
+type MangoObject = THREE.Object3D & { _collected?: boolean };
 const ENVIRONMENT_SPREAD = 130;
 const ROCK_COUNT = 60;
 const TREE_COUNT = 300;
@@ -111,7 +112,7 @@ function createSeededRandom(seed: number) {
   };
 }
 
-export function populateEnvironment(scene: THREE.Scene) {
+export function populateEnvironment(target: THREE.Object3D) {
   mangos.length = 0; // Reset on remount / HMR
   const random = createSeededRandom(42);
   const loader = new GLTFLoader();
@@ -128,11 +129,11 @@ export function populateEnvironment(scene: THREE.Scene) {
       const baseMango = mango.scene;
 
       enableShadows([...treeModels, baseRock, baseMango]);
-      scatterRocks(scene, baseRock, random);
-      scatterTrees(scene, treeModels, random);
+      scatterRocks(target, baseRock, random);
+      scatterTrees(target, treeModels, random);
 
       mangos.length = 0; // Clear exactly before scattering to defeat any duplicate async race conditions
-      scatterMangos(scene, baseMango, random);
+      scatterMangos(target, baseMango, random);
 
       console.log('Trees, rocks, and mangos loaded and scattered');
     })
@@ -156,7 +157,7 @@ function enableShadows(models: THREE.Object3D[]) {
 }
 
 function scatterRocks(
-  scene: THREE.Scene,
+  target: THREE.Object3D,
   baseRock: THREE.Object3D,
   random: () => number,
 ) {
@@ -176,12 +177,12 @@ function scatterRocks(
     rock.rotation.y = random() * Math.PI * 2;
 
     registerCollider({ x, z, radius: scale * 0.8 });
-    scene.add(rock);
+    target.add(rock);
   }
 }
 
 function scatterTrees(
-  scene: THREE.Scene,
+  target: THREE.Object3D,
   treeModels: THREE.Object3D[],
   random: () => number,
 ) {
@@ -205,16 +206,16 @@ function scatterTrees(
     tree.rotation.y = random() * Math.PI * 2;
 
     registerCollider({ x, z, radius: 0.4 * scale });
-    scene.add(tree);
+    target.add(tree);
   }
 }
 
-export const mangos: THREE.Object3D[] = [];
+export const mangos: MangoObject[] = [];
 
 export function collectMango(index: number, scene: THREE.Scene): boolean {
   const mango = mangos[index];
-  if (!mango || (mango as any)._collected) return false;
-  (mango as any)._collected = true;
+  if (!mango || mango._collected) return false;
+  mango._collected = true;
 
   mango.visible = false;
   mango.traverse((child) => {
@@ -232,7 +233,7 @@ export function collectMango(index: number, scene: THREE.Scene): boolean {
 }
 
 function scatterMangos(
-  scene: THREE.Scene,
+  target: THREE.Object3D,
   baseMango: THREE.Object3D,
   random: () => number,
 ) {
@@ -245,7 +246,7 @@ function scatterMangos(
       continue;
     }
 
-    const mango = baseMango.clone();
+    const mango = baseMango.clone() as MangoObject;
     // Make mangos smaller
     const scale = 0.3 + random() * 0.3;
     // Raise them slightly above the terrain to sit neatly on the grass
@@ -255,7 +256,7 @@ function scatterMangos(
     mango.rotation.x = (random() - 0.5) * 0.5;
     mango.rotation.z = (random() - 0.5) * 0.5;
 
-    scene.add(mango);
+    target.add(mango);
     mangos.push(mango);
   }
 }

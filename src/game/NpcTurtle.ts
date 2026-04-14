@@ -231,6 +231,7 @@ class SingleNPC {
 export class NPCTurtleManager {
   private npcs: SingleNPC[] = [];
   private loaded = false;
+  private visible = true;
   private readonly positionBuffer: { x: number; z: number }[] = [];
 
   private scene: THREE.Scene;
@@ -299,12 +300,19 @@ export class NPCTurtleManager {
   }
 
   update(dt: number) {
-    if (!this.loaded) return;
+    if (!this.loaded || !this.visible) return;
     for (let i = 0; i < this.npcs.length; i++) {
       const npc = this.npcs[i];
       npc.update(dt);
       this.positionBuffer[i].x = npc.group.position.x;
       this.positionBuffer[i].z = npc.group.position.z;
+    }
+  }
+
+  setVisible(visible: boolean) {
+    this.visible = visible;
+    for (const npc of this.npcs) {
+      npc.group.visible = visible;
     }
   }
 

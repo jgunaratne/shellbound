@@ -142,7 +142,7 @@ export function getTerrainHeight(x: number, z: number): number {
 
 
 
-export function createTerrain(scene: THREE.Scene): THREE.Mesh {
+export function createTerrain(target: THREE.Object3D): THREE.Mesh {
   const SIZE = 300;
   const SEGS = 280;
 
@@ -329,7 +329,7 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   const mesh = new THREE.Mesh(mergedGeometry, material);
   mesh.receiveShadow = true;
   mesh.name = 'terrain';
-  scene.add(mesh);
+  target.add(mesh);
 
   return mesh;
 }
@@ -423,7 +423,7 @@ function makeWaterFragmentShader(alphaExpr: string, applyFog: boolean): string {
 }
 
 /** Creates opaque ocean (with hole under the lake) + transparent lake */
-export function createWater(scene: THREE.Scene) {
+export function createWater(target: THREE.Object3D) {
   // --- 1. Large opaque ocean with a circular hole cut out for the lake ---
   const LAKE_RADIUS = 56; // must cover the full basin smoothstep(10, 55)
   const LAKE_SEGMENTS = 64;
@@ -478,7 +478,7 @@ export function createWater(scene: THREE.Scene) {
   const ocean = new THREE.Mesh(oceanGeo, waterMaterial);
   ocean.position.y = -2.0;
   ocean.name = 'ocean';
-  scene.add(ocean);
+  target.add(ocean);
 
   // --- 2. Smaller transparent lake over the carved basin ---
   const lakeGeo = new THREE.CircleGeometry(LAKE_RADIUS, LAKE_SEGMENTS);
@@ -502,5 +502,5 @@ export function createWater(scene: THREE.Scene) {
   lake.position.set(LAKE_CENTER_X, -1.90, LAKE_CENTER_Z);
   lake.renderOrder = 1; // render after terrain so alpha blending works
   lake.name = 'lake';
-  scene.add(lake);
+  target.add(lake);
 }
