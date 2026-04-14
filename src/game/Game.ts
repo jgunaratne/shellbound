@@ -13,6 +13,7 @@ import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NPCTurtle';
 import { Minimap } from './Minimap';
 import skyUrl from '../assets/sky.png';
+import skyAfternoonUrl from '../assets/sky_afternoon.png';
 
 export class Game {
   private scene: THREE.Scene;
@@ -24,12 +25,18 @@ export class Game {
   private minimap!: Minimap;
   private tpCamera: ThirdPersonCamera;
   private skydome: THREE.Object3D | null = null;
+  private skyMaterial: THREE.MeshBasicMaterial | null = null;
+  private skyCapMaterial: THREE.MeshBasicMaterial | null = null;
   private composer!: EffectComposer;
   private bokehPass!: BokehPass;
   private ssaoPass!: SSAOPass;
   private animId = 0;
   private lastTime = 0;
   private sun!: THREE.DirectionalLight;
+  private ambientLight!: THREE.AmbientLight;
+  private fillLight!: THREE.DirectionalLight;
+  private currentPreset: '1' | '2' = '1';
+  private onKeyHandler: (e: KeyboardEvent) => void;
 
   constructor(canvas: HTMLCanvasElement) {
     // --- Renderer ---
@@ -53,15 +60,15 @@ export class Game {
     // --- Lighting System (Realistic multi-source standard) ---
     
     // 1. Sky ambient bounce fill
-    const ambientLight = new THREE.AmbientLight(0xc9d8f0, 1.0);
-    this.scene.add(ambientLight);
+    this.ambientLight = new THREE.AmbientLight(0xc9d8f0, 1.0);
+    this.scene.add(this.ambientLight);
 
     // 2. Primary mid-afternoon sun (warm)
     const sun = new THREE.DirectionalLight(0xfff5e0, 2.8);
     sun.position.set(100, 150, 50);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    const halfWorld = 150; // covers the full 300x300 ground area tightly
+    const halfWorld = 150;
     sun.shadow.camera.left = -halfWorld;
     sun.shadow.camera.right = halfWorld;
     sun.shadow.camera.top = halfWorld;
@@ -75,9 +82,21 @@ export class Game {
     this.scene.add(sun);
 
     // 3. Secondary subtle cooler back-fill to illuminate shadowed faces naturally
-    const fillLight = new THREE.DirectionalLight(0xc9d8f0, 1.2);
-    fillLight.position.set(-100, 50, -50);
-    this.scene.add(fillLight);
+    this.fillLight = new THREE.DirectionalLight(0xc9d8f0, 1.2);
+    this.fillLight.position.set(-100, 50, -50);
+    this.scene.add(this.fillLight);
+
+    // --- Time-of-day key handler ---
+    this.onKeyHandler = (e: KeyboardEvent) => {
+      if (e.code === 'Digit1' && this.currentPreset !== '1') {
+        this.currentPreset = '1';
+        this.applyPreset('1');
+      } else if (e.code === 'Digit2' && this.currentPreset !== '2') {
+        this.currentPreset = '2';
+        this.applyPreset('2');
+      }
+    };
+    window.addEventListener('keydown', this.onKeyHandler);
 
     // --- Terrain & water ---
     createTerrain(this.scene);
@@ -182,14 +201,12 @@ export class Game {
 
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
-      // Tile the panorama horizontally for full 360° wrap
       texture.wrapS = THREE.RepeatWrapping;
       texture.wrapT = THREE.ClampToEdgeWrapping;
       texture.repeat.set(3, 1);
 
       const skyRadius = 350;
       const skyHeight = 800;
-      // Open-ended cylinder — UVs map linearly: U around, V bottom-to-top
       const geo = new THREE.CylinderGeometry(
         skyRadius, skyRadius, skyHeight, 64, 1, true
       );
@@ -199,14 +216,14 @@ export class Game {
         depthWrite: false,
         fog: false,
       });
+      this.skyMaterial = mat;
 
-      // ── Cinematic Atmospheric Sky Blur via GPU Shader ────
+      // Cinematic sky blur shader
       mat.onBeforeCompile = (shader) => {
         shader.fragmentShader = shader.fragmentShader.replace(
           'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
           `
           float blurAmt = 0.008;
-          
           vec4 sampledDiffuseColor = (
             texture2D(map, vMapUv) +
             texture2D(map, vMapUv + vec2(blurAmt, 0.0)) +
@@ -224,27 +241,134 @@ export class Game {
       const cylinder = new THREE.Mesh(geo, mat);
       skyGroup.add(cylinder);
 
-      // Disc cap to close the top — matched to the blue sky color
+      // Disc cap to close the top
       const capGeo = new THREE.CircleGeometry(skyRadius, 64);
       const capMat = new THREE.MeshBasicMaterial({
-        color: 0xc9d8f0, // clear blue sky color
+        color: 0xc9d8f0,
         side: THREE.BackSide,
         depthWrite: false,
         fog: false,
       });
+      this.skyCapMaterial = capMat;
       const cap = new THREE.Mesh(capGeo, capMat);
       cap.rotation.x = Math.PI / 2;
       cap.position.y = skyHeight / 2;
       skyGroup.add(cap);
 
-      // Shift dome up so clouds sit nicely near the horizon
       skyGroup.position.y = 300;
-
       skyGroup.renderOrder = -1;
       this.skydome = skyGroup;
       this.scene.add(skyGroup);
     };
     img.src = skyUrl;
+  }
+
+  /** Load a sky image, feather its edges, and return a repeating CanvasTexture */
+  private loadSkyTexture(url: string, callback: (tex: THREE.CanvasTexture) => void) {
+    const img = new Image();
+    img.onload = () => {
+      const W = 1024, H = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, W, H);
+      const origData = ctx.getImageData(0, 0, W, H);
+      const origPx = origData.data;
+
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = W; offCanvas.height = H;
+      const offCtx = offCanvas.getContext('2d')!;
+      const halfW = W / 2;
+      offCtx.drawImage(canvas, halfW, 0, halfW, H, 0, 0, halfW, H);
+      offCtx.drawImage(canvas, 0, 0, halfW, H, halfW, 0, halfW, H);
+      const offPx = offCtx.getImageData(0, 0, W, H).data;
+
+      const BLEND = 0.35;
+      const result = ctx.createImageData(W, H);
+      const out = result.data;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const nx = x / W;
+          const wx = nx < BLEND ? nx / BLEND : nx > (1 - BLEND) ? (1 - nx) / BLEND : 1.0;
+          const w = 0.5 - 0.5 * Math.cos(wx * Math.PI);
+          const i = (y * W + x) * 4;
+          out[i]     = origPx[i]     * w + offPx[i]     * (1 - w);
+          out[i + 1] = origPx[i + 1] * w + offPx[i + 1] * (1 - w);
+          out[i + 2] = origPx[i + 2] * w + offPx[i + 2] * (1 - w);
+          out[i + 3] = 255;
+        }
+      }
+      ctx.putImageData(result, 0, 0);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.repeat.set(3, 1);
+      callback(tex);
+    };
+    img.src = url;
+  }
+
+  /** Apply a time-of-day preset */
+  private applyPreset(preset: '1' | '2') {
+    if (preset === '1') {
+      // ── Midday ──
+      this.sun.color.setHex(0xfff5e0);
+      this.sun.intensity = 2.8;
+      this.sun.position.set(100, 150, 50);
+
+      this.ambientLight.color.setHex(0xc9d8f0);
+      this.ambientLight.intensity = 1.0;
+
+      this.fillLight.color.setHex(0xc9d8f0);
+      this.fillLight.intensity = 1.2;
+
+      const fogColor = 0xc9d8f0;
+      (this.scene.fog as THREE.FogExp2).color.setHex(fogColor);
+      (this.scene.background as THREE.Color).setHex(fogColor);
+
+      if (this.skyCapMaterial) this.skyCapMaterial.color.setHex(0xc9d8f0);
+
+      this.renderer.toneMappingExposure = 1.4;
+
+      // Swap sky texture
+      this.loadSkyTexture(skyUrl, (tex) => {
+        if (this.skyMaterial) {
+          this.skyMaterial.map?.dispose();
+          this.skyMaterial.map = tex;
+          this.skyMaterial.needsUpdate = true;
+        }
+      });
+    } else {
+      // ── Late Afternoon / Early Evening ──
+      this.sun.color.setHex(0xffb347); // warm amber-orange sun
+      this.sun.intensity = 2.6;
+      this.sun.position.set(80, 40, 80); // low on the horizon
+
+      this.ambientLight.color.setHex(0x9a8ab0); // lighter dusky ambient
+      this.ambientLight.intensity = 1.0;
+
+      this.fillLight.color.setHex(0x6a7aaa); // brighter blue backfill
+      this.fillLight.intensity = 1.2;
+
+      const fogColor = 0xd4a574; // warm hazy amber fog
+      (this.scene.fog as THREE.FogExp2).color.setHex(fogColor);
+      (this.scene.background as THREE.Color).setHex(fogColor);
+
+      if (this.skyCapMaterial) this.skyCapMaterial.color.setHex(0xc49060);
+
+      this.renderer.toneMappingExposure = 1.35;
+
+      // Swap sky texture
+      this.loadSkyTexture(skyAfternoonUrl, (tex) => {
+        if (this.skyMaterial) {
+          this.skyMaterial.map?.dispose();
+          this.skyMaterial.map = tex;
+          this.skyMaterial.needsUpdate = true;
+        }
+      });
+    }
   }
 
 
@@ -304,6 +428,7 @@ export class Game {
     cancelAnimationFrame(this.animId);
     this.input.dispose();
     this.minimap.dispose();
+    window.removeEventListener('keydown', this.onKeyHandler);
     window.removeEventListener('resize', this.onResize);
     this.bokehPass.dispose();
     this.composer.dispose();
