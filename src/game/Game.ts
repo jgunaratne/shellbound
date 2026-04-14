@@ -7,7 +7,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { InputManager } from './InputManager';
 import { Player } from './Player';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
-import { createTerrain, createWater, waterMaterial, lakeMaterial } from './Terrain';
+import { createTerrain, createWater, getTerrainHeight, waterMaterial, lakeMaterial } from './Terrain';
 import { populateEnvironment } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NpcTurtle';
@@ -50,6 +50,7 @@ const LOW_FPS_FRAME_TIME_MS = 1000 / 50;
 const RECOVERY_FRAME_TIME_MS = 1000 / 57;
 const DEGRADE_HOLD_MS = 4000;
 const RECOVERY_HOLD_MS = 8000;
+const OUTDOOR_WORLD_BOUNDS = 148;
 
 const QUALITY_PROFILES: Record<
   QualityTier,
@@ -103,7 +104,9 @@ const PRESETS: Record<PresetId, PresetDefinition> = {
 };
 
 export class Game {
-  private readonly scene: THREE.Scene;
+  private readonly outdoorScene: THREE.Scene;
+  private readonly caveScene: THREE.Scene;
+  private activeScene: THREE.Scene;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly input: InputManager;
   private readonly player: Player;
@@ -111,16 +114,15 @@ export class Game {
   private readonly npcTurtles: NPCTurtleManager;
   private readonly minimap: Minimap;
   private readonly tpCamera: ThirdPersonCamera;
-  private readonly composer: EffectComposer;
-  private readonly ssaoPass: SSAOPass;
-  private readonly bokehPass: BokehPass;
+  private composer: EffectComposer;
+  private renderPass: RenderPass;
+  private ssaoPass: SSAOPass;
+  private bokehPass: BokehPass;
   private readonly outdoorWorld: THREE.Group;
   private readonly caveWorld: THREE.Group;
-  private readonly caveLight: THREE.PointLight;
-  private readonly caveFillLight: THREE.PointLight;
-  private readonly sun: THREE.DirectionalLight;
-  private readonly ambientLight: THREE.AmbientLight;
-  private readonly fillLight: THREE.DirectionalLight;
+  private readonly outdoorSun: THREE.DirectionalLight;
+  private readonly outdoorAmbientLight: THREE.AmbientLight;
+  private readonly outdoorFillLight: THREE.DirectionalLight;
   private currentPreset: PresetId = '1';
   private targetPreset: PresetId = '1';
   private worldMode: WorldMode = 'outdoor';
@@ -141,26 +143,28 @@ export class Game {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = this.createRenderer(canvas);
-    this.scene = this.createScene();
-    this.createSkydome(PRESETS[this.currentPreset].skyUrl);
+    this.outdoorScene = this.createScene(FOG_COLOR);
+    this.caveScene = this.createScene(0x3a3027, 0.01);
+    this.activeScene = this.outdoorScene;
     this.outdoorWorld = new THREE.Group();
     this.outdoorWorld.name = 'outdoor_world';
-    this.scene.add(this.outdoorWorld);
+    this.outdoorScene.add(this.outdoorWorld);
     this.caveWorld = createCaveScene(CAVE_SPAWN.y);
-    this.scene.add(this.caveWorld);
+    this.caveScene.add(this.caveWorld);
+    this.createSkydome(PRESETS[this.currentPreset].skyUrl);
 
-    const lighting = this.createLighting();
-    this.sun = lighting.sun;
-    this.ambientLight = lighting.ambientLight;
-    this.fillLight = lighting.fillLight;
-    this.caveLight = lighting.caveLight;
-    this.caveFillLight = lighting.caveFillLight;
+    const outdoorLighting = this.createOutdoorLighting();
+    this.outdoorSun = outdoorLighting.sun;
+    this.outdoorAmbientLight = outdoorLighting.ambientLight;
+    this.outdoorFillLight = outdoorLighting.fillLight;
 
-    this.initializeWorld();
+    this.createCaveLighting();
+
+    this.initializeOutdoorWorld();
     this.grass = new InstancedGrass(GRASS_INSTANCE_COUNT);
-    this.scene.add(this.grass.mesh);
+    this.outdoorScene.add(this.grass.mesh);
 
-    this.player = new Player(this.scene);
+    this.player = new Player(this.outdoorScene);
     this.player.onMangoCollected = () => {
       if (this.onMangoCollected) {
         this.onMangoCollected();
@@ -172,9 +176,14 @@ export class Game {
       minZ: -148,
       maxZ: 148,
     });
-    this.npcTurtles = new NPCTurtleManager(this.scene);
+    this.npcTurtles = new NPCTurtleManager(this.outdoorScene);
     this.minimap = new Minimap();
     this.tpCamera = new ThirdPersonCamera();
+    this.player.setGroundingResolvers(
+      this.getOutdoorGroundHeight,
+      this.isOutdoorWalkable,
+    );
+    this.tpCamera.setGroundHeightResolver(this.getOutdoorGroundHeight);
     this.input = new InputManager(canvas);
 
     // Apply initial preset instantly
@@ -182,6 +191,7 @@ export class Game {
 
     const postProcessing = this.createPostProcessing();
     this.composer = postProcessing.composer;
+    this.renderPass = postProcessing.renderPass;
     this.ssaoPass = postProcessing.ssaoPass;
     this.bokehPass = postProcessing.bokehPass;
     this.applyQualityProfile();
@@ -220,16 +230,16 @@ export class Game {
     return renderer;
   }
 
-  private createScene(): THREE.Scene {
+  private createScene(backgroundColor: number, fogDensity = 0.0025): THREE.Scene {
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(FOG_COLOR, 0.0025);
-    scene.background = new THREE.Color(FOG_COLOR);
+    scene.fog = new THREE.FogExp2(backgroundColor, fogDensity);
+    scene.background = new THREE.Color(backgroundColor);
     return scene;
   }
 
-  private createLighting() {
+  private createOutdoorLighting() {
     const ambientLight = new THREE.AmbientLight(FOG_COLOR, 1.0);
-    this.scene.add(ambientLight);
+    this.outdoorScene.add(ambientLight);
 
     const sun = new THREE.DirectionalLight(0xfff5e0, 2.8);
     sun.position.set(100, 150, 50);
@@ -244,26 +254,33 @@ export class Game {
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.02;
     sun.shadow.camera.updateProjectionMatrix();
-    this.scene.add(sun);
+    this.outdoorScene.add(sun);
 
     const fillLight = new THREE.DirectionalLight(FOG_COLOR, 1.2);
     fillLight.position.set(-100, 50, -50);
-    this.scene.add(fillLight);
+    this.outdoorScene.add(fillLight);
 
-    const caveLight = new THREE.PointLight(0xffb066, 0, 40, 2);
+    return { sun, ambientLight, fillLight };
+  }
+
+  private createCaveLighting() {
+    const ambientLight = new THREE.AmbientLight(0x9a8b74, 1.9);
+    this.caveScene.add(ambientLight);
+
+    const caveLight = new THREE.PointLight(0xffb066, 8.5, 40, 2);
     caveLight.position.set(-3, CAVE_SPAWN.y + 3.8, -3);
     caveLight.castShadow = true;
     caveLight.shadow.mapSize.set(1024, 1024);
-    this.scene.add(caveLight);
+    this.caveScene.add(caveLight);
 
-    const caveFillLight = new THREE.PointLight(0x7ea6ff, 0, 36, 2);
+    const caveFillLight = new THREE.PointLight(0x7ea6ff, 3.4, 36, 2);
     caveFillLight.position.set(6, CAVE_SPAWN.y + 4.5, 6);
-    this.scene.add(caveFillLight);
+    this.caveScene.add(caveFillLight);
 
-    return { sun, ambientLight, fillLight, caveLight, caveFillLight };
+    return { ambientLight, caveLight, caveFillLight };
   }
 
-  private initializeWorld() {
+  private initializeOutdoorWorld() {
     createTerrain(this.outdoorWorld);
     createWater(this.outdoorWorld);
     populateEnvironment(this.outdoorWorld);
@@ -271,10 +288,11 @@ export class Game {
 
   private createPostProcessing() {
     const composer = new EffectComposer(this.renderer);
-    composer.addPass(new RenderPass(this.scene, this.tpCamera.camera));
+    const renderPass = new RenderPass(this.activeScene, this.tpCamera.camera);
+    composer.addPass(renderPass);
 
     const ssaoPass = new SSAOPass(
-      this.scene,
+      this.activeScene,
       this.tpCamera.camera,
       window.innerWidth,
       window.innerHeight,
@@ -284,7 +302,7 @@ export class Game {
     ssaoPass.maxDistance = 0.1;
     composer.addPass(ssaoPass);
 
-    const bokehPass = new BokehPass(this.scene, this.tpCamera.camera, {
+    const bokehPass = new BokehPass(this.activeScene, this.tpCamera.camera, {
       focus: 7.0,
       aperture: 0.0001,
       maxblur: 0.004,
@@ -292,7 +310,7 @@ export class Game {
     composer.addPass(bokehPass);
     composer.addPass(new OutputPass());
 
-    return { composer, bokehPass, ssaoPass };
+    return { composer, renderPass, bokehPass, ssaoPass };
   }
 
   private applyQualityProfile() {
@@ -375,7 +393,7 @@ export class Game {
       this.skyMaterialB = skyMaterialB;
       this.skyCapMaterial = skyCapMaterial;
       this.skydome = skyGroup;
-      this.scene.add(skyGroup);
+      this.outdoorScene.add(skyGroup);
     });
   }
 
@@ -506,17 +524,17 @@ export class Game {
     });
 
     if (instant) {
-      this.sun.color.setHex(preset.sun.color);
-      this.sun.intensity = preset.sun.intensity;
-      this.sun.position.set(...preset.sun.position);
+      this.outdoorSun.color.setHex(preset.sun.color);
+      this.outdoorSun.intensity = preset.sun.intensity;
+      this.outdoorSun.position.set(...preset.sun.position);
 
-      this.ambientLight.color.setHex(preset.ambient.color);
-      this.ambientLight.intensity = preset.ambient.intensity;
+      this.outdoorAmbientLight.color.setHex(preset.ambient.color);
+      this.outdoorAmbientLight.intensity = preset.ambient.intensity;
 
-      this.fillLight.color.setHex(preset.fill.color);
-      this.fillLight.intensity = preset.fill.intensity;
+      this.outdoorFillLight.color.setHex(preset.fill.color);
+      this.outdoorFillLight.intensity = preset.fill.intensity;
 
-      this.setFogColor(preset.fogColor);
+      this.setFogColor(this.outdoorScene, preset.fogColor);
       if (this.skyCapMaterial) {
         this.skyCapMaterial.color.setHex(preset.skyCapColor);
       }
@@ -537,20 +555,20 @@ export class Game {
     const tempColor = new THREE.Color();
     const tempPos = new THREE.Vector3();
 
-    this.sun.color.lerp(tempColor.setHex(preset.sun.color), speed);
-    this.sun.intensity += (preset.sun.intensity - this.sun.intensity) * speed;
+    this.outdoorSun.color.lerp(tempColor.setHex(preset.sun.color), speed);
+    this.outdoorSun.intensity += (preset.sun.intensity - this.outdoorSun.intensity) * speed;
     tempPos.set(...preset.sun.position);
-    this.sun.position.lerp(tempPos, speed);
+    this.outdoorSun.position.lerp(tempPos, speed);
 
-    this.ambientLight.color.lerp(tempColor.setHex(preset.ambient.color), speed);
-    this.ambientLight.intensity += (preset.ambient.intensity - this.ambientLight.intensity) * speed;
+    this.outdoorAmbientLight.color.lerp(tempColor.setHex(preset.ambient.color), speed);
+    this.outdoorAmbientLight.intensity += (preset.ambient.intensity - this.outdoorAmbientLight.intensity) * speed;
 
-    this.fillLight.color.lerp(tempColor.setHex(preset.fill.color), speed);
-    this.fillLight.intensity += (preset.fill.intensity - this.fillLight.intensity) * speed;
+    this.outdoorFillLight.color.lerp(tempColor.setHex(preset.fill.color), speed);
+    this.outdoorFillLight.intensity += (preset.fill.intensity - this.outdoorFillLight.intensity) * speed;
 
     const fogTarget = tempColor.setHex(preset.fogColor);
-    (this.scene.fog as THREE.FogExp2).color.lerp(fogTarget, speed);
-    (this.scene.background as THREE.Color).lerp(fogTarget, speed);
+    (this.outdoorScene.fog as THREE.FogExp2).color.lerp(fogTarget, speed);
+    (this.outdoorScene.background as THREE.Color).lerp(fogTarget, speed);
 
     if (this.skyCapMaterial) {
       this.skyCapMaterial.color.lerp(tempColor.setHex(preset.skyCapColor), speed);
@@ -579,53 +597,73 @@ export class Game {
 
   private activateOutdoorWorld(presetId: PresetId) {
     this.worldMode = 'outdoor';
+    this.activeScene = this.outdoorScene;
     this.currentPreset = presetId;
-    this.outdoorWorld.visible = true;
-    this.grass.mesh.visible = true;
+    this.outdoorScene.add(this.player.group);
     this.npcTurtles.setVisible(true);
     this.minimap.setVisible(true);
-    this.caveWorld.visible = false;
-    this.caveLight.intensity = 0;
-    this.caveFillLight.intensity = 0;
-    this.sun.visible = true;
-    this.fillLight.visible = true;
-    if (this.skydome) {
-      this.skydome.visible = true;
-    }
+    this.updatePostProcessingScene();
     this.player.setMovementBounds({
-      minX: -148,
-      maxX: 148,
-      minZ: -148,
-      maxZ: 148,
+      minX: -OUTDOOR_WORLD_BOUNDS,
+      maxX: OUTDOOR_WORLD_BOUNDS,
+      minZ: -OUTDOOR_WORLD_BOUNDS,
+      maxZ: OUTDOOR_WORLD_BOUNDS,
     });
+    this.player.setGroundingResolvers(
+      this.getOutdoorGroundHeight,
+      this.isOutdoorWalkable,
+    );
+    this.tpCamera.setGroundHeightResolver(this.getOutdoorGroundHeight);
     this.applyPreset(presetId);
   }
 
   private activateCaveWorld() {
     this.worldMode = 'cave';
-    this.outdoorWorld.visible = false;
-    this.grass.mesh.visible = false;
+    this.activeScene = this.caveScene;
+    this.caveScene.add(this.player.group);
     this.npcTurtles.setVisible(false);
     this.minimap.setVisible(false);
-    this.caveWorld.visible = true;
-    this.caveLight.intensity = 8.5;
-    this.caveFillLight.intensity = 3.4;
-    this.sun.visible = false;
-    this.fillLight.visible = false;
-    this.ambientLight.color.setHex(0x9a8b74);
-    this.ambientLight.intensity = 1.9;
-    if (this.skydome) {
-      this.skydome.visible = false;
-    }
-    this.setFogColor(0x3a3027);
+    this.updatePostProcessingScene();
     this.renderer.toneMappingExposure = 1.85;
     this.player.setMovementBounds(CAVE_BOUNDS);
+    this.player.setGroundingResolvers(
+      this.getCaveGroundHeight,
+      this.isCaveWalkable,
+    );
+    this.tpCamera.setGroundHeightResolver(this.getCaveGroundHeight);
     this.player.setPosition(CAVE_SPAWN.x, CAVE_SPAWN.y, CAVE_SPAWN.z);
   }
 
-  private setFogColor(color: number) {
-    (this.scene.fog as THREE.FogExp2).color.setHex(color);
-    (this.scene.background as THREE.Color).setHex(color);
+  private readonly getOutdoorGroundHeight = (x: number, z: number) => {
+    return getTerrainHeight(x, z);
+  };
+
+  private readonly isOutdoorWalkable = (x: number, z: number) => {
+    return getTerrainHeight(x, z) > -1.9;
+  };
+
+  private readonly getCaveGroundHeight = () => {
+    return CAVE_SPAWN.y;
+  };
+
+  private readonly isCaveWalkable = (x: number, z: number) => {
+    return (
+      x >= CAVE_BOUNDS.minX &&
+      x <= CAVE_BOUNDS.maxX &&
+      z >= CAVE_BOUNDS.minZ &&
+      z <= CAVE_BOUNDS.maxZ
+    );
+  };
+
+  private updatePostProcessingScene() {
+    this.renderPass.scene = this.activeScene;
+    this.ssaoPass.scene = this.activeScene;
+    this.bokehPass.scene = this.activeScene;
+  }
+
+  private setFogColor(scene: THREE.Scene, color: number) {
+    (scene.fog as THREE.FogExp2).color.setHex(color);
+    (scene.background as THREE.Color).setHex(color);
   }
 
   private updateWaterColors(
