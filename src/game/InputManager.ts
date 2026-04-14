@@ -1,9 +1,15 @@
+const DOUBLE_TAP_WINDOW = 300; // ms
+
 export class InputManager {
   private keys: Set<string> = new Set();
   private mouseDeltaX = 0;
   private mouseDeltaY = 0;
   private _pointerLocked = false;
   private canvas: HTMLCanvasElement;
+
+  // Double-tap W → run
+  private lastWPressTime = 0;
+  private _isRunning = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -29,12 +35,22 @@ export class InputManager {
   }
 
   private onKeyDown(e: KeyboardEvent) {
+    if (e.code === 'KeyW' && !e.repeat) {
+      const now = performance.now();
+      if (now - this.lastWPressTime < DOUBLE_TAP_WINDOW) {
+        this._isRunning = true;
+      }
+      this.lastWPressTime = now;
+    }
     this.keys.add(e.code);
     if (['Space','ArrowUp','ArrowDown'].includes(e.code)) e.preventDefault();
   }
 
   private onKeyUp(e: KeyboardEvent) {
     this.keys.delete(e.code);
+    if (e.code === 'KeyW') {
+      this._isRunning = false;
+    }
   }
 
   private onMouseMove(e: MouseEvent) {
@@ -57,6 +73,10 @@ export class InputManager {
 
   get pointerLocked(): boolean {
     return this._pointerLocked;
+  }
+
+  get isRunning(): boolean {
+    return this._isRunning;
   }
 
   dispose() {
