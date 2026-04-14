@@ -3,9 +3,11 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { getTerrainHeight } from './terrain';
 import { colliders } from './environment';
 import type { InputManager } from './InputManager';
-import turtleUrl from '../assets/turtle_walking.glb';
+import turtleWalkUrl from '../assets/turtle_walking.glb';
+import turtleRunUrl from '../assets/turtle_running.glb';
 
-const SPEED = 8;
+const WALK_SPEED = 8;
+const RUN_SPEED = 16;
 const TURN_SPEED = 5;
 const GRAVITY_SNAP = 12; // how fast player snaps to terrain height
 const PLAYER_RADIUS = 2.0; // Increased footprint to prevent any clipping through rocks and trees
@@ -13,6 +15,9 @@ const PLAYER_RADIUS = 2.0; // Increased footprint to prevent any clipping throug
 export class Player {
   readonly group: THREE.Group;
   private mixer: THREE.AnimationMixer | null = null;
+  private walkAction: THREE.AnimationAction | null = null;
+  private runAction: THREE.AnimationAction | null = null;
+  private wasRunning = false;
 
   // Facing angle in world-space (radians, Y axis)
   facingAngle = 0;
@@ -28,8 +33,11 @@ export class Player {
   private async loadModel() {
     try {
       const loader = new GLTFLoader();
-      const gltf = await loader.loadAsync(turtleUrl);
-      const model = gltf.scene;
+      const [walkGltf, runGltf] = await Promise.all([
+        loader.loadAsync(turtleWalkUrl),
+        loader.loadAsync(turtleRunUrl),
+      ]);
+      const model = walkGltf.scene;
 
       // Enable shadows and fix materials so they react beautifully to the scene lighting
       model.traverse((child) => {
@@ -71,15 +79,22 @@ export class Player {
       // Add model directly
       this.group.add(model);
 
-      // Play all animations from the GLB
-      if (gltf.animations.length > 0) {
-        this.mixer = new THREE.AnimationMixer(model);
-        for (const clip of gltf.animations) {
-          this.mixer.clipAction(clip).play();
-        }
+      // Set up animation mixer on the walk model and register both walk + run clips
+      this.mixer = new THREE.AnimationMixer(model);
+
+      if (walkGltf.animations.length > 0) {
+        this.walkAction = this.mixer.clipAction(walkGltf.animations[0]);
+        this.walkAction.play();
       }
 
-      console.log('Turtle loaded');
+      if (runGltf.animations.length > 0) {
+        // Use the run clip from the run GLTF but target the walk model's skeleton
+        this.runAction = this.mixer.clipAction(runGltf.animations[0]);
+        this.runAction.play();
+        this.runAction.setEffectiveWeight(0); // start silent
+      }
+
+      console.log('Turtle loaded (walk + run)');
     } catch (err) {
       console.error('Failed to load turtle model:', err);
     }
@@ -90,6 +105,9 @@ export class Player {
     const back = input.isDown('KeyS') || input.isDown('ArrowDown');
     const left = input.isDown('KeyA') || input.isDown('ArrowLeft');
     const right = input.isDown('KeyD') || input.isDown('ArrowRight');
+
+    const isRunning = input.isRunning && fwd;
+    const speed = isRunning ? RUN_SPEED : WALK_SPEED;
 
     let moveX = 0;
     let moveZ = 0;
@@ -106,8 +124,8 @@ export class Player {
       moveX /= len;
       moveZ /= len;
 
-      const nextX = this.group.position.x + moveX * SPEED * dt;
-      const nextZ = this.group.position.z + moveZ * SPEED * dt;
+      const nextX = this.group.position.x + moveX * speed * dt;
+      const nextZ = this.group.position.z + moveZ * speed * dt;
 
       // Strict, impenetrable shoreline block: completely prevent walking into the lake (water level -2.0)
       if (getTerrainHeight(nextX, nextZ) > -1.9) {
@@ -156,6 +174,18 @@ export class Player {
     // Snap to terrain height with smooth lerp
     const targetY = getTerrainHeight(this.group.position.x, this.group.position.z);
     this.group.position.y += (targetY - this.group.position.y) * GRAVITY_SNAP * dt;
+
+    // Crossfade between walk and run animations
+    if (this.walkAction && this.runAction) {
+      if (isRunning && !this.wasRunning) {
+        this.runAction.setEffectiveWeight(1);
+        this.walkAction.setEffectiveWeight(0);
+      } else if (!isRunning && this.wasRunning) {
+        this.walkAction.setEffectiveWeight(1);
+        this.runAction.setEffectiveWeight(0);
+      }
+      this.wasRunning = isRunning;
+    }
 
     // Update animation — play when moving, pause when idle
     if (this.mixer) {

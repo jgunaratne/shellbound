@@ -115,8 +115,19 @@ export function getTerrainHeight(x: number, z: number): number {
 
   rawHeight -= lakeBasin * 10.0;
 
-  // Prevent small puddles: clamp terrain above water level (-1.9) everywhere except the main lake
-  if (lakeBasin < 0.01) {
+  // ── Coastal edge falloff: slope terrain below water near world borders ──
+  // Distance from edge (0 at border, large in center)
+  const HALF = 150; // half the terrain size
+  const edgeDistX = HALF - Math.abs(x);
+  const edgeDistZ = HALF - Math.abs(z);
+  const edgeDist = Math.min(edgeDistX, edgeDistZ); // closest edge
+  // smoothstep from 0→1 over the outermost 40 units
+  const coastFade = THREE.MathUtils.smoothstep(edgeDist, 0, 40);
+  // Push terrain deeply below water at the edge (-8 submerged)
+  rawHeight = rawHeight * coastFade + (-8.0) * (1.0 - coastFade);
+
+  // Prevent small puddles: clamp terrain above water level (-1.9) everywhere except the main lake AND coast
+  if (lakeBasin < 0.01 && coastFade > 0.99) {
     rawHeight = Math.max(rawHeight, -1.5);
   }
 
@@ -167,7 +178,7 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
   // ── Clean, straight UV coordinates ────
-  const TILE_REPEAT = 6; // Fewer repeats = bigger tiles = far less visible seams
+  const TILE_REPEAT = 20; // Higher repeat = smaller tiles = sharper detail per tile
 
   const uvAttr = geometry.attributes.uv as THREE.BufferAttribute;
   for (let i = 0; i < uvAttr.count; i++) {
@@ -178,12 +189,93 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   }
   uvAttr.needsUpdate = true;
 
-  // ── Grass texture ────────────────
-  const grassTex = new THREE.TextureLoader().load(grassUrl);
+  // ── Seamless grass texture (edge-feathered at runtime) ────────────────
+  // Load the raw image, then blend opposite edges so it tiles without visible seams
+  const grassTex = new THREE.Texture();
   grassTex.colorSpace = THREE.SRGBColorSpace;
   grassTex.wrapS = THREE.RepeatWrapping;
   grassTex.wrapT = THREE.RepeatWrapping;
   grassTex.anisotropy = 16;
+  grassTex.minFilter = THREE.LinearMipmapLinearFilter;
+  grassTex.magFilter = THREE.LinearFilter;
+
+  {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        // Render to a power-of-two canvas for optimal mipmapping
+        const SIZE = 1024;
+        const canvas = document.createElement('canvas');
+        canvas.width = SIZE;
+        canvas.height = SIZE;
+        const ctx = canvas.getContext('2d')!;
+
+        // Draw the source image scaled to fill the canvas
+        ctx.drawImage(img, 0, 0, SIZE, SIZE);
+        const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
+        const px = imageData.data;
+
+        // Create a copy offset by half in both axes (Photoshop "Offset" trick)
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = SIZE;
+        offCanvas.height = SIZE;
+        const offCtx = offCanvas.getContext('2d')!;
+        const halfW = SIZE / 2;
+        const halfH = SIZE / 2;
+        // Draw 4 quadrants shifted by half
+        offCtx.drawImage(canvas, halfW, halfH, halfW, halfH, 0, 0, halfW, halfH);
+        offCtx.drawImage(canvas, 0, halfH, halfW, halfH, halfW, 0, halfW, halfH);
+        offCtx.drawImage(canvas, halfW, 0, halfW, halfH, 0, halfH, halfW, halfH);
+        offCtx.drawImage(canvas, 0, 0, halfW, halfH, halfW, halfH, halfW, halfH);
+        const offData = offCtx.getImageData(0, 0, SIZE, SIZE);
+        const offPx = offData.data;
+
+        // Blend: use cosine-weighted cross-fade in a wide border region
+        // The offset version has seamless edges but a seam in the center;
+        // the original has seamless center but seams at edges.
+        // Blend them so center uses original, edges use offset version.
+        const BLEND = 0.5; // 50% of each axis for maximum edge blending
+        const result = ctx.createImageData(SIZE, SIZE);
+        const out = result.data;
+
+        for (let y = 0; y < SIZE; y++) {
+          // Weight: 1.0 at center, 0.0 at edges
+          const ny = y / SIZE;
+          const wy = ny < BLEND ? ny / BLEND
+                    : ny > (1 - BLEND) ? (1 - ny) / BLEND
+                    : 1.0;
+
+          for (let x = 0; x < SIZE; x++) {
+            const nx = x / SIZE;
+            const wx = nx < BLEND ? nx / BLEND
+                      : nx > (1 - BLEND) ? (1 - nx) / BLEND
+                      : 1.0;
+
+            // Smooth the weight with cosine curve for gentle falloff
+            const w = 0.5 - 0.5 * Math.cos(Math.min(wx, wy) * Math.PI);
+            const i = (y * SIZE + x) * 4;
+
+            // w=1 → original, w=0 → offset (seamless at edges)
+            out[i]     = px[i]     * w + offPx[i]     * (1 - w);
+            out[i + 1] = px[i + 1] * w + offPx[i + 1] * (1 - w);
+            out[i + 2] = px[i + 2] * w + offPx[i + 2] * (1 - w);
+            out[i + 3] = 255;
+          }
+        }
+
+        ctx.putImageData(result, 0, 0);
+        grassTex.image = canvas;
+        grassTex.needsUpdate = true;
+      } catch (e) {
+        // Fallback: use raw image if canvas processing fails (e.g. CORS)
+        console.warn('Grass feathering failed, using raw texture:', e);
+        grassTex.image = img;
+        grassTex.needsUpdate = true;
+      }
+    };
+    img.src = grassUrl;
+  }
 
   const material = new THREE.MeshStandardMaterial({ 
     map: grassTex, 
@@ -196,17 +288,19 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = `
       // --- Hex tiling helpers ---
-      vec4 hex_hash4(vec2 p) {
-          return fract(sin(vec4(
+      float hex_hash1(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      vec2 hex_hash2(vec2 p) {
+          return fract(sin(vec2(
               dot(p, vec2(127.1, 311.7)),
-              dot(p, vec2(269.5, 183.3)),
-              dot(p, vec2(419.2, 371.9)),
-              dot(p, vec2(523.7, 247.1))
+              dot(p, vec2(269.5, 183.3))
           )) * 43758.5453);
       }
 
-      // Hex grid cell decomposition: returns barycentric-like weights + cell IDs
+      // Hex grid cell decomposition with 60-degree-snapped rotations
       void hexTile(vec2 uv, out vec2 uv1, out vec2 uv2, out vec2 uv3, out float w1, out float w2, out float w3) {
+          // Skewed hex grid
           vec2 q = vec2(uv.x * 2.0 * 0.5773503, uv.y + uv.x * 0.5773503);
           vec2 qi = floor(q);
           vec2 qf = fract(q);
@@ -221,20 +315,28 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
               v1i = qi + vec2(1.0, 1.0);
           }
 
-          // Random UV offsets per hex cell
-          vec4 h1 = hex_hash4(v1i);
-          vec4 h2 = hex_hash4(v2i);
-          vec4 h3 = hex_hash4(v3i);
+          // Per-cell random offset (no rotation — preserves texture orientation)
+          vec2 off1 = hex_hash2(v1i) * 100.0;
+          vec2 off2 = hex_hash2(v2i) * 100.0;
+          vec2 off3 = hex_hash2(v3i) * 100.0;
 
-          // Rotated + offset UVs per cell
-          float rot1 = h1.z * 6.2831;
-          float rot2 = h2.z * 6.2831;
-          float rot3 = h3.z * 6.2831;
-          uv1 = mat2(cos(rot1), -sin(rot1), sin(rot1), cos(rot1)) * uv + h1.xy;
-          uv2 = mat2(cos(rot2), -sin(rot2), sin(rot2), cos(rot2)) * uv + h2.xy;
-          uv3 = mat2(cos(rot3), -sin(rot3), sin(rot3), cos(rot3)) * uv + h3.xy;
+          // Snap rotations to multiples of 90° to avoid directional artifacts
+          float rotIdx1 = floor(hex_hash1(v1i + 0.5) * 4.0);
+          float rotIdx2 = floor(hex_hash1(v2i + 0.5) * 4.0);
+          float rotIdx3 = floor(hex_hash1(v3i + 0.5) * 4.0);
+          float rot1 = rotIdx1 * 1.5708; // π/2
+          float rot2 = rotIdx2 * 1.5708;
+          float rot3 = rotIdx3 * 1.5708;
 
-          // Barycentric weights from triangle position
+          float c1 = cos(rot1), s1 = sin(rot1);
+          float c2 = cos(rot2), s2 = sin(rot2);
+          float c3 = cos(rot3), s3 = sin(rot3);
+
+          uv1 = mat2(c1, -s1, s1, c1) * uv + off1;
+          uv2 = mat2(c2, -s2, s2, c2) * uv + off2;
+          uv3 = mat2(c3, -s3, s3, c3) * uv + off3;
+
+          // Barycentric weights
           if (triType > 0.5) {
               w1 = 1.0 - qf.x - qf.y;
               w2 = qf.x;
@@ -245,11 +347,11 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
               w3 = 1.0 - qf.x;
           }
 
-          // Smooth the weights to avoid harsh transitions
-          w1 = smoothstep(0.0, 1.0, w1);
-          w2 = smoothstep(0.0, 1.0, w2);
-          w3 = smoothstep(0.0, 1.0, w3);
-          float wSum = w1 + w2 + w3;
+          // Aggressive power-curve smoothing to hide transition bands
+          w1 = pow(smoothstep(0.0, 1.0, w1), 3.0);
+          w2 = pow(smoothstep(0.0, 1.0, w2), 3.0);
+          w3 = pow(smoothstep(0.0, 1.0, w3), 3.0);
+          float wSum = w1 + w2 + w3 + 0.0001;
           w1 /= wSum;
           w2 /= wSum;
           w3 /= wSum;
@@ -270,18 +372,18 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
     shader.fragmentShader = shader.fragmentShader.replace(
       'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
       `
-      // Hex tiling: sample texture in 3 overlapping hex cells with random rotation/offset per cell
+      // Hex tiling: sample texture in 3 overlapping hex cells
       vec2 hexUv1, hexUv2, hexUv3;
       float hw1, hw2, hw3;
-      hexTile(vMapUv * 0.7, hexUv1, hexUv2, hexUv3, hw1, hw2, hw3);
+      hexTile(vMapUv * 0.5, hexUv1, hexUv2, hexUv3, hw1, hw2, hw3);
 
       vec4 sampledDiffuseColor =
           texture2D(map, hexUv1) * hw1 +
           texture2D(map, hexUv2) * hw2 +
           texture2D(map, hexUv3) * hw3;
 
-      // Subtle macro brightness variation
-      float macro = mix(0.8, 1.2, perlin_noise(vMapUv * 0.04 + vec2(5.3, 7.1)));
+      // Subtle macro brightness variation to break up uniformity
+      float macro = mix(0.85, 1.15, perlin_noise(vMapUv * 0.03 + vec2(5.3, 7.1)));
       sampledDiffuseColor.rgb *= macro;
       `
     );
@@ -307,95 +409,163 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
 }
 
 export let waterMaterial: THREE.ShaderMaterial | null = null;
+export let lakeMaterial: THREE.ShaderMaterial | null = null;
 
-/** Beautiful procedural turbulence water plane */
+// Shared water noise GLSL functions
+const WATER_NOISE_GLSL = `
+  float random(float x) {
+      return fract(sin(x) * 10000.0);
+  }
+
+  float noise(vec2 p) {
+      return random(p.x + p.y * 10000.0);
+  }
+
+  vec2 sw(vec2 p) { return vec2(floor(p.x), floor(p.y)); }
+  vec2 se(vec2 p) { return vec2(ceil(p.x), floor(p.y)); }
+  vec2 nw(vec2 p) { return vec2(floor(p.x), ceil(p.y)); }
+  vec2 ne(vec2 p) { return vec2(ceil(p.x), ceil(p.y)); }
+
+  float smoothNoise(vec2 p) {
+      vec2 interp = smoothstep(0.0, 1.0, fract(p));
+      float s = mix(noise(sw(p)), noise(se(p)), interp.x);
+      float n = mix(noise(nw(p)), noise(ne(p)), interp.x);
+      return mix(s, n, interp.y);
+  }
+
+  float fractalNoise(vec2 p) {
+      float x = 0.0;
+      x += smoothNoise(p      );
+      x += smoothNoise(p * 2.0) / 2.0;
+      x += smoothNoise(p * 4.0) / 4.0;
+      x += smoothNoise(p * 8.0) / 8.0;
+      x += smoothNoise(p * 16.0) / 16.0;
+      x /= 1.0 + 1.0/2.0 + 1.0/4.0 + 1.0/8.0 + 1.0/16.0;
+      return x;
+  }
+
+  float movingNoise(vec2 p) {
+      float slowTime = uTime * 0.15;
+      float x = fractalNoise(p + slowTime);
+      float y = fractalNoise(p - slowTime);
+      return fractalNoise(p + vec2(x, y));   
+  }
+
+  float nestedNoise(vec2 p) {
+      float x = movingNoise(p);
+      float y = movingNoise(p + 100.0);
+      return movingNoise(p + vec2(x, y));
+  }
+`;
+
+const WATER_VERTEX = `
+  varying vec2 vUv;
+  varying float vFogDepth;
+  void main() {
+    vUv = uv;
+    vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+    vFogDepth = -mvPos.z;
+    gl_Position = projectionMatrix * mvPos;
+  }
+`;
+
+function makeWaterFragmentShader(alphaExpr: string, applyFog: boolean): string {
+  const fogCode = applyFog ? `
+        // Exponential fog matching scene FogExp2(0xc9d8f0, 0.0025)
+        float fogDensity = 0.0025;
+        float fogFactor = exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
+        fogFactor = clamp(fogFactor, 0.0, 1.0);
+        vec3 fogColor = vec3(0.788, 0.847, 0.941); // 0xc9d8f0
+        finalColor = mix(fogColor, finalColor, fogFactor);
+  ` : '';
+
+  return `
+    uniform float uTime;
+    varying vec2 vUv;
+    varying float vFogDepth;
+    ${WATER_NOISE_GLSL}
+    void main() {
+        vec2 uv = vUv * 12.0;
+        float n = nestedNoise(uv);
+        vec3 baseBlue = vec3(0.01, 0.04, 0.12);
+        vec3 highlightBlue = vec3(0.05, 0.15, 0.30);
+        float sharpNoise = pow(n, 2.5);
+        vec3 finalColor = mix(baseBlue, highlightBlue, sharpNoise);
+        ${fogCode}
+        gl_FragColor = vec4(finalColor, ${alphaExpr});
+    }
+  `;
+}
+
+/** Creates opaque ocean (with hole under the lake) + transparent lake */
 export function createWater(scene: THREE.Scene) {
-  const geo = new THREE.PlaneGeometry(300, 300);
-  geo.rotateX(-Math.PI / 2);
-  
+  // --- 1. Large opaque ocean with a circular hole cut out for the lake ---
+  const LAKE_RADIUS = 48;
+  const LAKE_SEGMENTS = 64;
+  const LAKE_CENTER_X = 0;
+  const LAKE_CENTER_Z = -60;
+
+  // Build a large square shape for the ocean
+  const oceanHalf = 1000;
+  const oceanShape = new THREE.Shape();
+  oceanShape.moveTo(-oceanHalf, -oceanHalf);
+  oceanShape.lineTo(oceanHalf, -oceanHalf);
+  oceanShape.lineTo(oceanHalf, oceanHalf);
+  oceanShape.lineTo(-oceanHalf, oceanHalf);
+  oceanShape.closePath();
+
+  // Cut a circular hole where the lake will be (in XZ → Shape uses XY, so Z maps to Y)
+  const holePath = new THREE.Path();
+  for (let i = 0; i <= LAKE_SEGMENTS; i++) {
+    const angle = (i / LAKE_SEGMENTS) * Math.PI * 2;
+    const hx = LAKE_CENTER_X + Math.cos(angle) * LAKE_RADIUS;
+    const hy = -LAKE_CENTER_Z + Math.sin(angle) * LAKE_RADIUS; // negate Z because Shape Y is flipped
+    if (i === 0) holePath.moveTo(hx, hy);
+    else holePath.lineTo(hx, hy);
+  }
+  oceanShape.holes.push(holePath);
+
+  const oceanGeo = new THREE.ShapeGeometry(oceanShape, 1);
+  // ShapeGeometry UVs are based on raw vertex coords — normalise to 0..1
+  const oceanUv = oceanGeo.attributes.uv as THREE.BufferAttribute;
+  for (let i = 0; i < oceanUv.count; i++) {
+    oceanUv.setXY(i,
+      (oceanUv.getX(i) + oceanHalf) / (oceanHalf * 2),
+      (oceanUv.getY(i) + oceanHalf) / (oceanHalf * 2)
+    );
+  }
+  oceanUv.needsUpdate = true;
+  // ShapeGeometry is in XY plane; rotate to XZ (face up)
+  oceanGeo.rotateX(-Math.PI / 2);
+
   waterMaterial = new THREE.ShaderMaterial({
-    uniforms: {
-      uTime: { value: 0.0 }
-    },
-    vertexShader: `
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uTime;
-      varying vec2 vUv;
-
-      float random(float x) {
-          return fract(sin(x) * 10000.0);
-      }
-
-      float noise(vec2 p) {
-          return random(p.x + p.y * 10000.0);
-      }
-
-      vec2 sw(vec2 p) { return vec2(floor(p.x), floor(p.y)); }
-      vec2 se(vec2 p) { return vec2(ceil(p.x), floor(p.y)); }
-      vec2 nw(vec2 p) { return vec2(floor(p.x), ceil(p.y)); }
-      vec2 ne(vec2 p) { return vec2(ceil(p.x), ceil(p.y)); }
-
-      float smoothNoise(vec2 p) {
-          vec2 interp = smoothstep(0.0, 1.0, fract(p));
-          float s = mix(noise(sw(p)), noise(se(p)), interp.x);
-          float n = mix(noise(nw(p)), noise(ne(p)), interp.x);
-          return mix(s, n, interp.y);
-      }
-
-      float fractalNoise(vec2 p) {
-          float x = 0.0;
-          x += smoothNoise(p      );
-          x += smoothNoise(p * 2.0) / 2.0;
-          x += smoothNoise(p * 4.0) / 4.0;
-          x += smoothNoise(p * 8.0) / 8.0;
-          x += smoothNoise(p * 16.0) / 16.0;
-          x /= 1.0 + 1.0/2.0 + 1.0/4.0 + 1.0/8.0 + 1.0/16.0;
-          return x;
-      }
-
-      float movingNoise(vec2 p) {
-          float slowTime = uTime * 0.15;
-          float x = fractalNoise(p + slowTime);
-          float y = fractalNoise(p - slowTime);
-          return fractalNoise(p + vec2(x, y));   
-      }
-
-      float nestedNoise(vec2 p) {
-          float x = movingNoise(p);
-          float y = movingNoise(p + 100.0);
-          return movingNoise(p + vec2(x, y));
-      }
-
-      void main() {
-          vec2 uv = vUv * 12.0;
-          float n = nestedNoise(uv);
-          
-          // Extremely dark near-black deep-sea teal base
-          vec3 baseBlue = vec3(0.0, 0.01, 0.01);
-          
-          // Highly subtle deep emerald caustics with absolutely zero white highlights
-          vec3 highlightBlue = vec3(0.01, 0.08, 0.08);
-          
-          // Apply a beautiful power curve so the swirling pattern is visible but deeply atmospheric
-          float sharpNoise = pow(n, 2.5);
-          
-          vec3 finalColor = mix(baseBlue, highlightBlue, sharpNoise);
-          
-          // Render with highly dense opacity (0.85) for a beautifully rich, substantial liquid presence
-          gl_FragColor = vec4(finalColor, 0.85);
-      }
-    `,
-    transparent: true
+    uniforms: { uTime: { value: 0.0 } },
+    vertexShader: WATER_VERTEX,
+    fragmentShader: makeWaterFragmentShader('1.0', true),
+    transparent: false,
   });
 
-  const mesh = new THREE.Mesh(geo, waterMaterial);
-  mesh.position.y = -2.0;
-  mesh.name = 'water';
-  scene.add(mesh);
+  const ocean = new THREE.Mesh(oceanGeo, waterMaterial);
+  ocean.position.y = -2.0;
+  ocean.name = 'ocean';
+  scene.add(ocean);
+
+  // --- 2. Smaller transparent lake over the carved basin ---
+  const lakeGeo = new THREE.CircleGeometry(LAKE_RADIUS, LAKE_SEGMENTS);
+  lakeGeo.rotateX(-Math.PI / 2);
+
+  lakeMaterial = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0.0 } },
+    vertexShader: WATER_VERTEX,
+    fragmentShader: makeWaterFragmentShader('0.75', false),
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
+  const lake = new THREE.Mesh(lakeGeo, lakeMaterial);
+  lake.position.set(LAKE_CENTER_X, -1.90, LAKE_CENTER_Z);
+  lake.renderOrder = 1; // render after terrain so alpha blending works
+  lake.name = 'lake';
+  scene.add(lake);
 }

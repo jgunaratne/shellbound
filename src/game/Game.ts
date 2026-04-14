@@ -7,9 +7,10 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { InputManager } from './InputManager';
 import { Player } from './Player';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
-import { createTerrain, createWater, waterMaterial } from './terrain';
+import { createTerrain, createWater, waterMaterial, lakeMaterial } from './terrain';
 import { populateEnvironment } from './environment';
 import { InstancedGrass } from './InstancedGrass';
+import { NPCTurtleManager } from './NPCTurtle';
 import skyUrl from '../assets/sky.png';
 
 export class Game {
@@ -18,6 +19,7 @@ export class Game {
   private input: InputManager;
   private player: Player;
   private grass!: InstancedGrass;
+  private npcTurtles!: NPCTurtleManager;
   private tpCamera: ThirdPersonCamera;
   private skydome: THREE.Object3D | null = null;
   private composer!: EffectComposer;
@@ -89,6 +91,9 @@ export class Game {
     // --- Player ---
     this.player = new Player(this.scene);
 
+    // --- NPC Turtles ---
+    this.npcTurtles = new NPCTurtleManager(this.scene);
+
     // --- Camera ---
     this.tpCamera = new ThirdPersonCamera();
 
@@ -122,8 +127,53 @@ export class Game {
   }
 
   private createSkydome() {
-    const loader = new THREE.TextureLoader();
-    loader.load(skyUrl, (texture) => {
+    const img = new Image();
+    img.onload = () => {
+      // Feather horizontal edges so the sky tiles seamlessly (same technique as grass)
+      const W = 1024;
+      const H = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, W, H);
+      const origData = ctx.getImageData(0, 0, W, H);
+      const origPx = origData.data;
+
+      // Create horizontally-offset copy (shift by half width)
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = W;
+      offCanvas.height = H;
+      const offCtx = offCanvas.getContext('2d')!;
+      const halfW = W / 2;
+      offCtx.drawImage(canvas, halfW, 0, halfW, H, 0, 0, halfW, H);
+      offCtx.drawImage(canvas, 0, 0, halfW, H, halfW, 0, halfW, H);
+      const offData = offCtx.getImageData(0, 0, W, H);
+      const offPx = offData.data;
+
+      // Blend: original in center, offset at horizontal edges
+      const BLEND = 0.35;
+      const result = ctx.createImageData(W, H);
+      const out = result.data;
+
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const nx = x / W;
+          const wx = nx < BLEND ? nx / BLEND
+                    : nx > (1 - BLEND) ? (1 - nx) / BLEND
+                    : 1.0;
+          const w = 0.5 - 0.5 * Math.cos(wx * Math.PI);
+          const i = (y * W + x) * 4;
+          out[i]     = origPx[i]     * w + offPx[i]     * (1 - w);
+          out[i + 1] = origPx[i + 1] * w + offPx[i + 1] * (1 - w);
+          out[i + 2] = origPx[i + 2] * w + offPx[i + 2] * (1 - w);
+          out[i + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(result, 0, 0);
+
+      const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
       // Tile the panorama horizontally for full 360° wrap
       texture.wrapS = THREE.RepeatWrapping;
@@ -186,7 +236,8 @@ export class Game {
       skyGroup.renderOrder = -1;
       this.skydome = skyGroup;
       this.scene.add(skyGroup);
-    });
+    };
+    img.src = skyUrl;
   }
 
 
@@ -202,6 +253,7 @@ export class Game {
     this.lastTime = time;
 
     this.player.update(dt, this.input, this.tpCamera.cameraYaw);
+    this.npcTurtles.update(dt);
     this.tpCamera.update(dt, this.player.position, this.input);
 
     // Keep skydome centered on the camera so it appears infinitely far
@@ -211,8 +263,12 @@ export class Game {
     }
 
     // Animate the highly realistic water turbulence shader
+    const waterTime = time / 1000.0;
     if (waterMaterial && waterMaterial.uniforms) {
-      waterMaterial.uniforms.uTime.value = time / 1000.0;
+      waterMaterial.uniforms.uTime.value = waterTime;
+    }
+    if (lakeMaterial && lakeMaterial.uniforms) {
+      lakeMaterial.uniforms.uTime.value = waterTime;
     }
 
     // Animate the highly performant 3D Instanced Grass swaying in the wind
