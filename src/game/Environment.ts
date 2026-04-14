@@ -5,15 +5,101 @@ import pineTreeUrl from '../assets/models/pine_tree.glb';
 import treeUrl from '../assets/models/tree.glb';
 import rockUrl from '../assets/models/rock.glb';
 
-type Collider = { x: number; z: number; radius: number };
+export type Collider = { x: number; z: number; radius: number };
+type IndexedCollider = Collider & { _cellKey?: string };
 const ENVIRONMENT_SPREAD = 130;
 const ROCK_COUNT = 60;
 const TREE_COUNT = 300;
 const WATER_LEVEL = -1.9;
 const TREE_CLEAR_RADIUS = 60;
 const TALL_TREE_CHANCE = 0.2;
+const COLLIDER_CELL_SIZE = 12;
 
 export const colliders: Collider[] = [];
+const colliderGrid = new Map<string, Set<IndexedCollider>>();
+
+function getColliderCell(value: number): number {
+  return Math.floor(value / COLLIDER_CELL_SIZE);
+}
+
+function getColliderCellKey(x: number, z: number): string {
+  return `${getColliderCell(x)},${getColliderCell(z)}`;
+}
+
+function insertColliderIntoGrid(collider: IndexedCollider) {
+  const key = getColliderCellKey(collider.x, collider.z);
+  let cell = colliderGrid.get(key);
+  if (!cell) {
+    cell = new Set<IndexedCollider>();
+    colliderGrid.set(key, cell);
+  }
+
+  cell.add(collider);
+  collider._cellKey = key;
+}
+
+function removeColliderFromGrid(collider: IndexedCollider) {
+  if (!collider._cellKey) {
+    return;
+  }
+
+  const cell = colliderGrid.get(collider._cellKey);
+  if (!cell) {
+    collider._cellKey = undefined;
+    return;
+  }
+
+  cell.delete(collider);
+  if (cell.size === 0) {
+    colliderGrid.delete(collider._cellKey);
+  }
+  collider._cellKey = undefined;
+}
+
+export function registerCollider(collider: Collider) {
+  const indexedCollider = collider as IndexedCollider;
+  colliders.push(collider);
+  insertColliderIntoGrid(indexedCollider);
+}
+
+export function updateCollider(collider: Collider, x: number, z: number) {
+  const indexedCollider = collider as IndexedCollider;
+  const nextCellKey = getColliderCellKey(x, z);
+
+  if (indexedCollider._cellKey !== nextCellKey) {
+    removeColliderFromGrid(indexedCollider);
+    collider.x = x;
+    collider.z = z;
+    insertColliderIntoGrid(indexedCollider);
+    return;
+  }
+
+  collider.x = x;
+  collider.z = z;
+}
+
+export function queryNearbyColliders(x: number, z: number, radius: number): Collider[] {
+  const minCellX = getColliderCell(x - radius);
+  const maxCellX = getColliderCell(x + radius);
+  const minCellZ = getColliderCell(z - radius);
+  const maxCellZ = getColliderCell(z + radius);
+  const nearby: Collider[] = [];
+
+  for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+      const cell = colliderGrid.get(`${cellX},${cellZ}`);
+      if (!cell) {
+        continue;
+      }
+
+      for (const collider of cell) {
+        nearby.push(collider);
+      }
+    }
+  }
+
+  return nearby;
+}
 
 function createSeededRandom(seed: number) {
   let state = seed;
@@ -81,7 +167,7 @@ function scatterRocks(
     rock.scale.setScalar(scale);
     rock.rotation.y = random() * Math.PI * 2;
 
-    colliders.push({ x, z, radius: scale * 0.8 });
+    registerCollider({ x, z, radius: scale * 0.8 });
     scene.add(rock);
   }
 }
@@ -110,7 +196,7 @@ function scatterTrees(
     tree.scale.setScalar(scale);
     tree.rotation.y = random() * Math.PI * 2;
 
-    colliders.push({ x, z, radius: 0.4 * scale });
+    registerCollider({ x, z, radius: 0.4 * scale });
     scene.add(tree);
   }
 }

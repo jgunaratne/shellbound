@@ -31,6 +31,8 @@ type PresetDefinition = {
   };
 };
 
+type QualityTier = 0 | 1 | 2;
+
 const FOG_COLOR = 0xc9d8f0;
 const SHADOW_WORLD_HALF = 150;
 const SKY_TEXTURE_SIZE = { width: 1024, height: 512 };
@@ -38,7 +40,22 @@ const SKY_EDGE_BLEND = 0.35;
 const SKY_TEXTURE_REPEAT_X = 3;
 const SKY_RADIUS = 350;
 const SKY_HEIGHT = 800;
-const GRASS_INSTANCE_COUNT = 80000;
+const GRASS_INSTANCE_COUNT = 50000;
+const MAX_RENDER_PIXEL_RATIO = 1.75;
+const TARGET_FRAME_TIME_MS = 1000 / 60;
+const LOW_FPS_FRAME_TIME_MS = 1000 / 50;
+const RECOVERY_FRAME_TIME_MS = 1000 / 57;
+const DEGRADE_HOLD_MS = 4000;
+const RECOVERY_HOLD_MS = 8000;
+
+const QUALITY_PROFILES: Record<
+  QualityTier,
+  { composerScale: number; ssaoEnabled: boolean; ssaoKernelRadius: number; ssaoMaxDistance: number }
+> = {
+  0: { composerScale: 1, ssaoEnabled: true, ssaoKernelRadius: 12, ssaoMaxDistance: 0.1 },
+  1: { composerScale: 0.92, ssaoEnabled: true, ssaoKernelRadius: 10, ssaoMaxDistance: 0.085 },
+  2: { composerScale: 0.85, ssaoEnabled: true, ssaoKernelRadius: 8, ssaoMaxDistance: 0.07 },
+};
 
 const PRESETS: Record<PresetId, PresetDefinition> = {
   '1': {
@@ -79,11 +96,17 @@ export class Game {
   private readonly minimap: Minimap;
   private readonly tpCamera: ThirdPersonCamera;
   private readonly composer: EffectComposer;
+  private readonly ssaoPass: SSAOPass;
   private readonly bokehPass: BokehPass;
   private readonly sun: THREE.DirectionalLight;
   private readonly ambientLight: THREE.AmbientLight;
   private readonly fillLight: THREE.DirectionalLight;
   private currentPreset: PresetId = '1';
+  private qualityTier: QualityTier = 0;
+  private basePixelRatio = 1;
+  private smoothedFrameTimeMs = TARGET_FRAME_TIME_MS;
+  private lowPerfElapsedMs = 0;
+  private recoveryElapsedMs = 0;
   private skydome: THREE.Group | null = null;
   private skyMaterial: THREE.MeshBasicMaterial | null = null;
   private skyCapMaterial: THREE.MeshBasicMaterial | null = null;
@@ -112,7 +135,9 @@ export class Game {
 
     const postProcessing = this.createPostProcessing();
     this.composer = postProcessing.composer;
+    this.ssaoPass = postProcessing.ssaoPass;
     this.bokehPass = postProcessing.bokehPass;
+    this.applyQualityProfile();
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('resize', this.onResize);
   }
@@ -135,7 +160,8 @@ export class Game {
 
   private createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    this.basePixelRatio = Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO);
+    renderer.setPixelRatio(this.basePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -207,6 +233,48 @@ export class Game {
     composer.addPass(new OutputPass());
 
     return { composer, bokehPass, ssaoPass };
+  }
+
+  private applyQualityProfile() {
+    const profile = QUALITY_PROFILES[this.qualityTier];
+    this.renderer.setPixelRatio(this.basePixelRatio);
+    this.composer.setPixelRatio(this.basePixelRatio * profile.composerScale);
+    this.ssaoPass.enabled = profile.ssaoEnabled;
+    this.ssaoPass.kernelRadius = profile.ssaoKernelRadius;
+    this.ssaoPass.maxDistance = profile.ssaoMaxDistance;
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  private updateAdaptiveQuality(dt: number) {
+    const frameTimeMs = dt * 1000;
+    this.smoothedFrameTimeMs = THREE.MathUtils.lerp(this.smoothedFrameTimeMs, frameTimeMs, 0.08);
+
+    if (this.smoothedFrameTimeMs > LOW_FPS_FRAME_TIME_MS) {
+      this.lowPerfElapsedMs += frameTimeMs;
+      this.recoveryElapsedMs = 0;
+    } else if (this.smoothedFrameTimeMs < RECOVERY_FRAME_TIME_MS) {
+      this.recoveryElapsedMs += frameTimeMs;
+      this.lowPerfElapsedMs = 0;
+    } else {
+      this.lowPerfElapsedMs = 0;
+      this.recoveryElapsedMs = 0;
+    }
+
+    if (this.lowPerfElapsedMs >= DEGRADE_HOLD_MS && this.qualityTier < 2) {
+      this.qualityTier = (this.qualityTier + 1) as QualityTier;
+      this.lowPerfElapsedMs = 0;
+      this.recoveryElapsedMs = 0;
+      this.applyQualityProfile();
+      return;
+    }
+
+    if (this.recoveryElapsedMs >= RECOVERY_HOLD_MS && this.qualityTier > 0) {
+      this.qualityTier = (this.qualityTier - 1) as QualityTier;
+      this.lowPerfElapsedMs = 0;
+      this.recoveryElapsedMs = 0;
+      this.applyQualityProfile();
+    }
   }
 
   private createSkydome(url: string) {
@@ -436,12 +504,13 @@ export class Game {
     this.updateSkydomePosition();
     this.updateWaterTime(timeSeconds);
     this.grass.update(timeSeconds);
+    this.updateAdaptiveQuality(dt);
     this.composer.render();
   };
 
   private readonly onResize = () => {
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.basePixelRatio = Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO);
+    this.applyQualityProfile();
     this.tpCamera.onResize();
   };
 

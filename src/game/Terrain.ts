@@ -144,7 +144,7 @@ export function getTerrainHeight(x: number, z: number): number {
 
 export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   const SIZE = 300;
-  const SEGS = 400;  // High segment count for smooth terrain geometry
+  const SEGS = 280;
 
   const geometry = new THREE.PlaneGeometry(SIZE, SIZE, SEGS, SEGS);
   geometry.rotateX(-Math.PI / 2);
@@ -196,7 +196,7 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   grassTex.colorSpace = THREE.SRGBColorSpace;
   grassTex.wrapS = THREE.RepeatWrapping;
   grassTex.wrapT = THREE.RepeatWrapping;
-  grassTex.anisotropy = 16;
+  grassTex.anisotropy = 8;
   grassTex.minFilter = THREE.LinearMipmapLinearFilter;
   grassTex.magFilter = THREE.LinearFilter;
 
@@ -285,7 +285,7 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
     metalness: 0.0
   });
 
-  // ── Overlapping tile fade: at every seam of one layer, the other is at full strength ────
+  // Keep the terrain shader light: a single texture read plus subtle macro variation.
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = `
       // Smooth value noise for macro variation
@@ -308,41 +308,7 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
     shader.fragmentShader = shader.fragmentShader.replace(
       /vec4 sampledDiffuseColor = texture2D\( map, vMapUv \);/,
       `
-      // ── Overlapping tile fade with edge blur ──
-
-      vec2 tileUV = vMapUv;
-      vec2 offsetUV = vMapUv + vec2(0.5);
-
-      // How close are we to a tile edge? (0 = center, 1 = edge)
-      vec2 f1 = fract(tileUV);
-      float nearEdgeX = 1.0 - smoothstep(0.0, 0.4, min(f1.x, 1.0 - f1.x));
-      float nearEdgeY = 1.0 - smoothstep(0.0, 0.4, min(f1.y, 1.0 - f1.y));
-      float nearEdge = max(nearEdgeX, nearEdgeY);
-
-      // Blur kernel: 5-tap cross pattern, only near edges
-      float texelSize = 1.0 / 512.0; // approximate texel size
-      float blurRadius = texelSize * 8.0 * nearEdge; // blur grows near edges
-
-      vec4 col1 = texture2D(map, tileUV);
-      col1 += texture2D(map, tileUV + vec2(blurRadius, 0.0));
-      col1 += texture2D(map, tileUV - vec2(blurRadius, 0.0));
-      col1 += texture2D(map, tileUV + vec2(0.0, blurRadius));
-      col1 += texture2D(map, tileUV - vec2(0.0, blurRadius));
-      col1 /= 5.0;
-
-      vec4 col2 = texture2D(map, offsetUV);
-      col2 += texture2D(map, offsetUV + vec2(blurRadius, 0.0));
-      col2 += texture2D(map, offsetUV - vec2(blurRadius, 0.0));
-      col2 += texture2D(map, offsetUV + vec2(0.0, blurRadius));
-      col2 += texture2D(map, offsetUV - vec2(0.0, blurRadius));
-      col2 /= 5.0;
-
-      // Overlap blend weight: 1 at center, 0 at edge (wide 40% fade zone)
-      float edgeBlendX = smoothstep(0.0, 0.4, f1.x) * smoothstep(0.0, 0.4, 1.0 - f1.x);
-      float edgeBlendY = smoothstep(0.0, 0.4, f1.y) * smoothstep(0.0, 0.4, 1.0 - f1.y);
-      float w1 = edgeBlendX * edgeBlendY;
-
-      vec4 sampledDiffuseColor = mix(col2, col1, w1);
+      vec4 sampledDiffuseColor = texture2D(map, vMapUv);
 
       // Macro brightness variation
       float macro = mix(0.90, 1.10,
@@ -356,14 +322,6 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
       console.warn('⚠️ Terrain shader: tile overlap replacement did NOT match!');
     }
   };
-
-  // Output from console logs:
-  // Ground mesh count in scene: 1
-  // Merged geometry vertex count: 40401
-  // Old tiles still in scene: 0
-  console.log('Ground mesh count in scene: 1');
-  console.log('Merged geometry vertex count:', geometry.attributes.position.count);
-  console.log('Old tiles still in scene: 0');
 
   const mergedGeometry = mergeVertices(geometry, 0.0001);
   mergedGeometry.computeVertexNormals();

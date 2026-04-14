@@ -20,9 +20,12 @@ type GrassMaterial = THREE.MeshLambertMaterial & {
  * - Fake AO: base vertices are darker, tips are brighter
  */
 export class InstancedGrass {
-  public mesh: THREE.InstancedMesh;
+  public mesh: THREE.Group;
+  private readonly material: GrassMaterial;
+  private readonly meshes: THREE.InstancedMesh[] = [];
 
   constructor(count = 25000) {
+    this.mesh = new THREE.Group();
     const bladeWidth = 0.015;
 
     // 7 blades per cluster, each with a different short height
@@ -66,18 +69,16 @@ export class InstancedGrass {
     tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;
 
-    const material: GrassMaterial = new THREE.MeshLambertMaterial({
+    this.material = new THREE.MeshLambertMaterial({
       map: tex,
       color: new THREE.Color(0.65, 0.82, 0.45), // slight green tint to match terrain grass
-      side: THREE.DoubleSide,
-      transparent: true,
-      depthWrite: false,
-      alphaTest: 0.01,
+      side: THREE.FrontSide,
+      alphaTest: 0.2,
     });
 
     // Inject custom wind animation, AO, world-UV sampling, and distance fade
     // into Three.js's built-in lighting/shadow pipeline
-    material.onBeforeCompile = (shader) => {
+    this.material.onBeforeCompile = (shader) => {
       // Add custom uniforms
       shader.uniforms.uTime = { value: 0 };
 
@@ -153,19 +154,16 @@ export class InstancedGrass {
       );
 
       // Store shader ref for uniform updates
-      material._grassShader = shader;
+      this.material._grassShader = shader;
     };
-
-    // Create the InstancedMesh
-    this.mesh = new THREE.InstancedMesh(clusterGeo, material, count);
-    this.mesh.name = 'instanced_grass';
-    this.mesh.frustumCulled = false;
-    this.mesh.receiveShadow = true;
 
     // Scatter across terrain using Perlin noise as a density map for natural patchy distribution
     const dummy = new THREE.Object3D();
     const SPREAD = 130;
     let placed = 0;
+    const PATCH_SIZE = 24;
+    const HALF_PATCH = PATCH_SIZE * 0.5;
+    const patchMatrices = new Map<string, THREE.Matrix4[]>();
 
     // Simple inline noise for density mapping
     const densityNoise = (x: number, z: number): number => {
@@ -212,17 +210,49 @@ export class InstancedGrass {
       const scale = (0.7 + patchStrength * 1.5) * (0.85 + Math.random() * 0.3);
       dummy.scale.setScalar(scale);
       dummy.updateMatrix();
-      this.mesh.setMatrixAt(placed, dummy.matrix);
+      const patchX = Math.floor((x + SPREAD) / PATCH_SIZE);
+      const patchZ = Math.floor((z + SPREAD) / PATCH_SIZE);
+      const patchKey = `${patchX},${patchZ}`;
+      let matrices = patchMatrices.get(patchKey);
+      if (!matrices) {
+        matrices = [];
+        patchMatrices.set(patchKey, matrices);
+      }
+      matrices.push(dummy.matrix.clone());
       placed++;
     }
 
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.mesh.count = placed;
+    for (const [patchKey, matrices] of patchMatrices) {
+      const patchMesh = new THREE.InstancedMesh(clusterGeo, this.material, matrices.length);
+      patchMesh.name = `instanced_grass_${patchKey}`;
+      patchMesh.receiveShadow = false;
+      patchMesh.castShadow = false;
+      patchMesh.frustumCulled = true;
+
+      for (let i = 0; i < matrices.length; i++) {
+        patchMesh.setMatrixAt(i, matrices[i]);
+      }
+
+      patchMesh.count = matrices.length;
+      patchMesh.instanceMatrix.needsUpdate = true;
+
+      const [gridX, gridZ] = patchKey.split(',').map(Number);
+      const centerX = -SPREAD + gridX * PATCH_SIZE + HALF_PATCH;
+      const centerZ = -SPREAD + gridZ * PATCH_SIZE + HALF_PATCH;
+      patchMesh.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(centerX, 2.5, centerZ),
+        Math.sqrt(HALF_PATCH * HALF_PATCH * 2) + 8,
+      );
+
+      this.meshes.push(patchMesh);
+      this.mesh.add(patchMesh);
+    }
+
+    this.mesh.name = 'instanced_grass';
   }
 
   public update(time: number) {
-    const material = this.mesh.material as GrassMaterial;
-    const timeUniform = material._grassShader?.uniforms.uTime;
+    const timeUniform = this.material._grassShader?.uniforms.uTime;
     if (timeUniform) {
       timeUniform.value = time;
     }

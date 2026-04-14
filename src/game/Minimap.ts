@@ -9,9 +9,14 @@ const WATER_LEVEL = -1.9;
 export class Minimap {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  private terrainImage: ImageData;
+  private readonly backgroundCanvas: HTMLCanvasElement;
+  private readonly backgroundCtx: CanvasRenderingContext2D;
   private visible = true;
   private onKeyDown: (e: KeyboardEvent) => void;
+  private lastRenderTime = 0;
+  private lastPlayerX = Number.NaN;
+  private lastPlayerZ = Number.NaN;
+  private lastPlayerAngle = Number.NaN;
 
   constructor() {
     // Create an overlay canvas anchored to the top-right corner
@@ -36,9 +41,12 @@ export class Minimap {
 
     document.body.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
+    this.backgroundCanvas = document.createElement('canvas');
+    this.backgroundCanvas.width = MAP_SIZE;
+    this.backgroundCanvas.height = MAP_SIZE;
+    this.backgroundCtx = this.backgroundCanvas.getContext('2d')!;
 
     // Pre-render the static terrain heightmap
-    this.terrainImage = this.ctx.createImageData(MAP_SIZE, MAP_SIZE);
     this.bakeTerrainImage();
 
     // Toggle with M key
@@ -53,7 +61,8 @@ export class Minimap {
 
   /** Sample the terrain once and create a static background image */
   private bakeTerrainImage() {
-    const data = this.terrainImage.data;
+    const terrainImage = this.backgroundCtx.createImageData(MAP_SIZE, MAP_SIZE);
+    const data = terrainImage.data;
 
     for (let py = 0; py < MAP_SIZE; py++) {
       for (let px = 0; px < MAP_SIZE; px++) {
@@ -81,6 +90,10 @@ export class Minimap {
         }
       }
     }
+
+    this.backgroundCtx.putImageData(terrainImage, 0, 0);
+    this.backgroundCtx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+    this.backgroundCtx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
   }
 
   /** Call every frame with the player's world position and facing angle */
@@ -88,17 +101,27 @@ export class Minimap {
     playerX: number,
     playerZ: number,
     playerAngle: number,
-    npcPositions?: { x: number; z: number }[],
+    npcPositions?: readonly { x: number; z: number }[],
   ) {
     if (!this.visible) return;
+    const now = performance.now();
+    const movedEnough =
+      Math.abs(playerX - this.lastPlayerX) > 0.2 ||
+      Math.abs(playerZ - this.lastPlayerZ) > 0.2 ||
+      Math.abs(playerAngle - this.lastPlayerAngle) > 0.03;
+    if (!movedEnough && now - this.lastRenderTime < 120) {
+      return;
+    }
+
+    this.lastRenderTime = now;
+    this.lastPlayerX = playerX;
+    this.lastPlayerZ = playerZ;
+    this.lastPlayerAngle = playerAngle;
     const ctx = this.ctx;
 
     // Draw the static terrain background
-    ctx.putImageData(this.terrainImage, 0, 0);
-
-    // Slight darkening overlay for contrast
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-    ctx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
+    ctx.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+    ctx.drawImage(this.backgroundCanvas, 0, 0);
 
     // ── Draw NPC dots ──
     if (npcPositions) {

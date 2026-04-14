@@ -2,7 +2,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { getTerrainHeight } from './Terrain';
-import { colliders } from './Environment';
+import {
+  queryNearbyColliders,
+  registerCollider,
+  updateCollider,
+  type Collider,
+} from './Environment';
 import turtleWalkUrl from '../assets/models/turtle_walking.glb';
 
 /* ── Constants ──────────────────────────────────────────────────────── */
@@ -63,7 +68,7 @@ class SingleNPC {
   private targetX = 0;
   private targetZ = 0;
   private rand: () => number;
-  private collider: { x: number; z: number; radius: number };
+  private collider: Collider;
 
   constructor(
     model: THREE.Group,
@@ -94,7 +99,7 @@ class SingleNPC {
 
     // Register a dynamic collider so the player can't walk through this NPC
     this.collider = { x, z, radius: NPC_RADIUS };
-    colliders.push(this.collider);
+    registerCollider(this.collider);
 
     // Set up animation mixer on the cloned model
     this.mixer = new THREE.AnimationMixer(clone);
@@ -155,7 +160,12 @@ class SingleNPC {
         }
 
         // Avoid colliders (rocks, trees) — skip our own collider
-        for (const c of colliders) {
+        const nearbyColliders = queryNearbyColliders(
+          this.group.position.x,
+          this.group.position.z,
+          WANDER_RADIUS + NPC_RADIUS,
+        );
+        for (const c of nearbyColliders) {
           if (c === this.collider) continue;
           const cdx = this.group.position.x - c.x;
           const cdz = this.group.position.z - c.z;
@@ -182,8 +192,7 @@ class SingleNPC {
     this.group.position.y += (terrainY - this.group.position.y) * 12 * dt;
 
     // Sync dynamic collider position so the player bounces off us
-    this.collider.x = this.group.position.x;
-    this.collider.z = this.group.position.z;
+    updateCollider(this.collider, this.group.position.x, this.group.position.z);
 
     // Advance animation
     if (this.mixer) this.mixer.update(dt);
@@ -222,6 +231,7 @@ class SingleNPC {
 export class NPCTurtleManager {
   private npcs: SingleNPC[] = [];
   private loaded = false;
+  private readonly positionBuffer: { x: number; z: number }[] = [];
 
   private scene: THREE.Scene;
 
@@ -277,6 +287,7 @@ export class NPCTurtleManager {
 
         const npc = new SingleNPC(baseModel, clip, x, z, 7000 + i * 131);
         this.npcs.push(npc);
+        this.positionBuffer.push({ x, z });
         this.scene.add(npc.group);
       }
 
@@ -289,16 +300,16 @@ export class NPCTurtleManager {
 
   update(dt: number) {
     if (!this.loaded) return;
-    for (const npc of this.npcs) {
+    for (let i = 0; i < this.npcs.length; i++) {
+      const npc = this.npcs[i];
       npc.update(dt);
+      this.positionBuffer[i].x = npc.group.position.x;
+      this.positionBuffer[i].z = npc.group.position.z;
     }
   }
 
   /** Return world positions of all NPCs (for minimap, etc.) */
-  getPositions(): { x: number; z: number }[] {
-    return this.npcs.map(npc => ({
-      x: npc.group.position.x,
-      z: npc.group.position.z,
-    }));
+  getPositions(): readonly { x: number; z: number }[] {
+    return this.positionBuffer;
   }
 }
