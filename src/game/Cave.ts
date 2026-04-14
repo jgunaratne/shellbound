@@ -320,6 +320,5 @@ export function createCaveScene(): THREE.Group {
   addRoomDetails(cave);
   addLighting(cave);
 
-  cave.visible = false;
   return cave;
 }
