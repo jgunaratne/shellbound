@@ -598,6 +598,7 @@ export class Game {
   private activateOutdoorWorld(presetId: PresetId) {
     this.worldMode = 'outdoor';
     this.activeScene = this.outdoorScene;
+    this.outdoorWorld.visible = true;
     this.currentPreset = presetId;
     this.outdoorScene.add(this.player.group);
     this.npcTurtles.setVisible(true);
@@ -620,6 +621,7 @@ export class Game {
   private activateCaveWorld() {
     this.worldMode = 'cave';
     this.activeScene = this.caveScene;
+    this.caveWorld.visible = true;
     this.caveScene.add(this.player.group);
     this.npcTurtles.setVisible(false);
     this.minimap.setVisible(false);
