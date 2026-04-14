@@ -3,9 +3,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { getTerrainHeight } from './Terrain';
 import { colliders } from './Environment';
 import type { InputManager } from './InputManager';
-import turtleWalkUrl from '../assets/turtle_walking.glb';
-import turtleRunUrl from '../assets/turtle_running.glb';
-import turtleJumpUrl from '../assets/turtle_jump_run.glb';
+import turtleWalkUrl from '../assets/models/turtle_walking.glb';
+import turtleRunUrl from '../assets/models/turtle_running.glb';
+import turtleJumpUrl from '../assets/models/turtle_jump_run.glb';
 
 const WALK_SPEED = 8;
 const RUN_SPEED = 16;

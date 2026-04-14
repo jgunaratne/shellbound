@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { getTerrainHeight } from './Terrain';
 import { colliders } from './Environment';
-import turtleWalkUrl from '../assets/turtle_walking.glb';
+import turtleWalkUrl from '../assets/models/turtle_walking.glb';
 
 /* ── Constants ──────────────────────────────────────────────────────── */
 
