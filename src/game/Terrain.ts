@@ -40,7 +40,7 @@ function _grad(hash: number, x: number, y: number): number {
 }
 
 /** Classic 2D Perlin noise, returns value in roughly [-1, 1] */
-function perlin2(x: number, y: number): number {
+export function perlin2(x: number, y: number): number {
   const xi = Math.floor(x) & 255;
   const yi = Math.floor(y) & 255;
   const xf = x - Math.floor(x);
