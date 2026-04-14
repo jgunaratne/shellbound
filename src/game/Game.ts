@@ -11,6 +11,7 @@ import { createTerrain, createWater, waterMaterial, lakeMaterial } from './terra
 import { populateEnvironment } from './environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NPCTurtle';
+import { Minimap } from './Minimap';
 import skyUrl from '../assets/sky.png';
 
 export class Game {
@@ -20,6 +21,7 @@ export class Game {
   private player: Player;
   private grass!: InstancedGrass;
   private npcTurtles!: NPCTurtleManager;
+  private minimap!: Minimap;
   private tpCamera: ThirdPersonCamera;
   private skydome: THREE.Object3D | null = null;
   private composer!: EffectComposer;
@@ -27,6 +29,7 @@ export class Game {
   private ssaoPass!: SSAOPass;
   private animId = 0;
   private lastTime = 0;
+  private sun!: THREE.DirectionalLight;
 
   constructor(canvas: HTMLCanvasElement) {
     // --- Renderer ---
@@ -68,6 +71,7 @@ export class Game {
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.02;
     sun.shadow.camera.updateProjectionMatrix();
+    this.sun = sun;
     this.scene.add(sun);
 
     // 3. Secondary subtle cooler back-fill to illuminate shadowed faces naturally
@@ -93,6 +97,9 @@ export class Game {
 
     // --- NPC Turtles ---
     this.npcTurtles = new NPCTurtleManager(this.scene);
+
+    // --- Minimap HUD ---
+    this.minimap = new Minimap();
 
     // --- Camera ---
     this.tpCamera = new ThirdPersonCamera();
@@ -256,6 +263,14 @@ export class Game {
     this.npcTurtles.update(dt);
     this.tpCamera.update(dt, this.player.position, this.input);
 
+    // Update minimap HUD
+    this.minimap.update(
+      this.player.position.x,
+      this.player.position.z,
+      this.player.facingAngle,
+      this.npcTurtles.getPositions(),
+    );
+
     // Keep skydome centered on the camera so it appears infinitely far
     if (this.skydome) {
       const camPos = this.tpCamera.camera.position;
@@ -288,6 +303,7 @@ export class Game {
   dispose() {
     cancelAnimationFrame(this.animId);
     this.input.dispose();
+    this.minimap.dispose();
     window.removeEventListener('resize', this.onResize);
     this.bokehPass.dispose();
     this.composer.dispose();

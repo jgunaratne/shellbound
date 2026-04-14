@@ -279,4 +279,12 @@ export class NPCTurtleManager {
       npc.update(dt);
     }
   }
+
+  /** Return world positions of all NPCs (for minimap, etc.) */
+  getPositions(): { x: number; z: number }[] {
+    return this.npcs.map(npc => ({
+      x: npc.group.position.x,
+      z: npc.group.position.z,
+    }));
+  }
 }

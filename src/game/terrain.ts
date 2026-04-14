@@ -106,14 +106,14 @@ export function getTerrainHeight(x: number, z: number): number {
 
   // Primary rolling hills
   // Generate massive, natural Perlin-based rolling hills and deep valleys
-  const base = fbm(x * SCALE + OFFSET_X, z * SCALE + OFFSET_Z, 5, 2.0, 0.5);
+  const base = fbm(x * SCALE + OFFSET_X, z * SCALE + OFFSET_Z, 3, 2.0, 0.45);
   let rawHeight = base * HEIGHT * 0.95;
 
   // Carve exactly ONE beautiful, dedicated mid-sized lake right in front of the player's starting view
   const distFromSingleLake = Math.sqrt(x * x + (z + 60) * (z + 60));
-  const lakeBasin = 1.0 - THREE.MathUtils.smoothstep(distFromSingleLake, 0, 45);
+  const lakeBasin = 1.0 - THREE.MathUtils.smoothstep(distFromSingleLake, 10, 55);
 
-  rawHeight -= lakeBasin * 10.0;
+  rawHeight -= lakeBasin * 8.0;
 
   // ── Coastal edge falloff: slope terrain below water near world borders ──
   // Distance from edge (0 at border, large in center)
@@ -126,9 +126,10 @@ export function getTerrainHeight(x: number, z: number): number {
   // Push terrain deeply below water at the edge (-8 submerged)
   rawHeight = rawHeight * coastFade + (-8.0) * (1.0 - coastFade);
 
-  // Prevent small puddles: clamp terrain above water level (-1.9) everywhere except the main lake AND coast
-  if (lakeBasin < 0.01 && coastFade > 0.99) {
-    rawHeight = Math.max(rawHeight, -1.5);
+  // Prevent small puddles: clamp terrain above water level everywhere except
+  // the main lake basin zone and the coastal edges
+  if (lakeBasin < 0.001 && coastFade > 0.99) {
+    rawHeight = Math.max(rawHeight, -1.0);
   }
 
   // Keep spawn completely level and dry
@@ -143,7 +144,7 @@ export function getTerrainHeight(x: number, z: number): number {
 
 export function createTerrain(scene: THREE.Scene): THREE.Mesh {
   const SIZE = 300;
-  const SEGS = 200;  // High segment count to capture Perlin noise detail
+  const SEGS = 400;  // High segment count for smooth terrain geometry
 
   const geometry = new THREE.PlaneGeometry(SIZE, SIZE, SEGS, SEGS);
   geometry.rotateX(-Math.PI / 2);
@@ -284,109 +285,76 @@ export function createTerrain(scene: THREE.Scene): THREE.Mesh {
     metalness: 0.0
   });
 
-  // ── Hex Tiling: eliminates grid seams by sampling in overlapping hexagonal cells ────
+  // ── Overlapping tile fade: at every seam of one layer, the other is at full strength ────
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = `
-      // --- Hex tiling helpers ---
-      float hex_hash1(vec2 p) {
-          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-      }
-      vec2 hex_hash2(vec2 p) {
-          return fract(sin(vec2(
-              dot(p, vec2(127.1, 311.7)),
-              dot(p, vec2(269.5, 183.3))
-          )) * 43758.5453);
-      }
-
-      // Hex grid cell decomposition with 60-degree-snapped rotations
-      void hexTile(vec2 uv, out vec2 uv1, out vec2 uv2, out vec2 uv3, out float w1, out float w2, out float w3) {
-          // Skewed hex grid
-          vec2 q = vec2(uv.x * 2.0 * 0.5773503, uv.y + uv.x * 0.5773503);
-          vec2 qi = floor(q);
-          vec2 qf = fract(q);
-
-          float triType = step(qf.x + qf.y, 1.0);
-
-          // Three vertices of the containing triangle
-          vec2 v1i = qi;
-          vec2 v2i = qi + vec2(1.0, 0.0);
-          vec2 v3i = qi + vec2(0.0, 1.0);
-          if (triType < 0.5) {
-              v1i = qi + vec2(1.0, 1.0);
-          }
-
-          // Per-cell random offset (no rotation — preserves texture orientation)
-          vec2 off1 = hex_hash2(v1i) * 100.0;
-          vec2 off2 = hex_hash2(v2i) * 100.0;
-          vec2 off3 = hex_hash2(v3i) * 100.0;
-
-          // Snap rotations to multiples of 90° to avoid directional artifacts
-          float rotIdx1 = floor(hex_hash1(v1i + 0.5) * 4.0);
-          float rotIdx2 = floor(hex_hash1(v2i + 0.5) * 4.0);
-          float rotIdx3 = floor(hex_hash1(v3i + 0.5) * 4.0);
-          float rot1 = rotIdx1 * 1.5708; // π/2
-          float rot2 = rotIdx2 * 1.5708;
-          float rot3 = rotIdx3 * 1.5708;
-
-          float c1 = cos(rot1), s1 = sin(rot1);
-          float c2 = cos(rot2), s2 = sin(rot2);
-          float c3 = cos(rot3), s3 = sin(rot3);
-
-          uv1 = mat2(c1, -s1, s1, c1) * uv + off1;
-          uv2 = mat2(c2, -s2, s2, c2) * uv + off2;
-          uv3 = mat2(c3, -s3, s3, c3) * uv + off3;
-
-          // Barycentric weights
-          if (triType > 0.5) {
-              w1 = 1.0 - qf.x - qf.y;
-              w2 = qf.x;
-              w3 = qf.y;
-          } else {
-              w1 = qf.x + qf.y - 1.0;
-              w2 = 1.0 - qf.y;
-              w3 = 1.0 - qf.x;
-          }
-
-          // Aggressive power-curve smoothing to hide transition bands
-          w1 = pow(smoothstep(0.0, 1.0, w1), 3.0);
-          w2 = pow(smoothstep(0.0, 1.0, w2), 3.0);
-          w3 = pow(smoothstep(0.0, 1.0, w3), 3.0);
-          float wSum = w1 + w2 + w3 + 0.0001;
-          w1 /= wSum;
-          w2 /= wSum;
-          w3 /= wSum;
-      }
-
-      float perlin_hash_f(vec2 p) {
+      // Smooth value noise for macro variation
+      float _tileHash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
       }
-      float perlin_noise(vec2 p) {
+      float _tileNoise(vec2 p) {
           vec2 i = floor(p);
           vec2 f = fract(p);
           vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(mix(perlin_hash_f(i), perlin_hash_f(i + vec2(1.0, 0.0)), u.x),
-                     mix(perlin_hash_f(i + vec2(0.0, 1.0)), perlin_hash_f(i + vec2(1.0, 1.0)), u.x), u.y);
+          return mix(
+              mix(_tileHash(i), _tileHash(i + vec2(1.0, 0.0)), u.x),
+              mix(_tileHash(i + vec2(0.0, 1.0)), _tileHash(i + vec2(1.0, 1.0)), u.x),
+              u.y
+          );
       }
     ` + shader.fragmentShader;
 
+    const original = shader.fragmentShader;
     shader.fragmentShader = shader.fragmentShader.replace(
-      'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
+      /vec4 sampledDiffuseColor = texture2D\( map, vMapUv \);/,
       `
-      // Hex tiling: sample texture in 3 overlapping hex cells
-      vec2 hexUv1, hexUv2, hexUv3;
-      float hw1, hw2, hw3;
-      hexTile(vMapUv * 0.5, hexUv1, hexUv2, hexUv3, hw1, hw2, hw3);
+      // ── Overlapping tile fade with edge blur ──
 
-      vec4 sampledDiffuseColor =
-          texture2D(map, hexUv1) * hw1 +
-          texture2D(map, hexUv2) * hw2 +
-          texture2D(map, hexUv3) * hw3;
+      vec2 tileUV = vMapUv;
+      vec2 offsetUV = vMapUv + vec2(0.5);
 
-      // Subtle macro brightness variation to break up uniformity
-      float macro = mix(0.85, 1.15, perlin_noise(vMapUv * 0.03 + vec2(5.3, 7.1)));
+      // How close are we to a tile edge? (0 = center, 1 = edge)
+      vec2 f1 = fract(tileUV);
+      float nearEdgeX = 1.0 - smoothstep(0.0, 0.4, min(f1.x, 1.0 - f1.x));
+      float nearEdgeY = 1.0 - smoothstep(0.0, 0.4, min(f1.y, 1.0 - f1.y));
+      float nearEdge = max(nearEdgeX, nearEdgeY);
+
+      // Blur kernel: 5-tap cross pattern, only near edges
+      float texelSize = 1.0 / 512.0; // approximate texel size
+      float blurRadius = texelSize * 8.0 * nearEdge; // blur grows near edges
+
+      vec4 col1 = texture2D(map, tileUV);
+      col1 += texture2D(map, tileUV + vec2(blurRadius, 0.0));
+      col1 += texture2D(map, tileUV - vec2(blurRadius, 0.0));
+      col1 += texture2D(map, tileUV + vec2(0.0, blurRadius));
+      col1 += texture2D(map, tileUV - vec2(0.0, blurRadius));
+      col1 /= 5.0;
+
+      vec4 col2 = texture2D(map, offsetUV);
+      col2 += texture2D(map, offsetUV + vec2(blurRadius, 0.0));
+      col2 += texture2D(map, offsetUV - vec2(blurRadius, 0.0));
+      col2 += texture2D(map, offsetUV + vec2(0.0, blurRadius));
+      col2 += texture2D(map, offsetUV - vec2(0.0, blurRadius));
+      col2 /= 5.0;
+
+      // Overlap blend weight: 1 at center, 0 at edge (wide 40% fade zone)
+      float edgeBlendX = smoothstep(0.0, 0.4, f1.x) * smoothstep(0.0, 0.4, 1.0 - f1.x);
+      float edgeBlendY = smoothstep(0.0, 0.4, f1.y) * smoothstep(0.0, 0.4, 1.0 - f1.y);
+      float w1 = edgeBlendX * edgeBlendY;
+
+      vec4 sampledDiffuseColor = mix(col2, col1, w1);
+
+      // Macro brightness variation
+      float macro = mix(0.90, 1.10,
+          _tileNoise(vMapUv * 0.04 + vec2(5.3, 7.1)) * 0.6 +
+          _tileNoise(vMapUv * 0.09 + vec2(23.7, 41.9)) * 0.4
+      );
       sampledDiffuseColor.rgb *= macro;
       `
     );
+    if (shader.fragmentShader === original) {
+      console.warn('⚠️ Terrain shader: tile overlap replacement did NOT match!');
+    }
   };
 
   // Output from console logs:
@@ -500,7 +468,7 @@ function makeWaterFragmentShader(alphaExpr: string, applyFog: boolean): string {
 /** Creates opaque ocean (with hole under the lake) + transparent lake */
 export function createWater(scene: THREE.Scene) {
   // --- 1. Large opaque ocean with a circular hole cut out for the lake ---
-  const LAKE_RADIUS = 48;
+  const LAKE_RADIUS = 56; // must cover the full basin smoothstep(10, 55)
   const LAKE_SEGMENTS = 64;
   const LAKE_CENTER_X = 0;
   const LAKE_CENTER_Z = -60;

@@ -5,19 +5,25 @@ import { colliders } from './environment';
 import type { InputManager } from './InputManager';
 import turtleWalkUrl from '../assets/turtle_walking.glb';
 import turtleRunUrl from '../assets/turtle_running.glb';
+import turtleJumpUrl from '../assets/turtle_jump_run.glb';
 
 const WALK_SPEED = 8;
 const RUN_SPEED = 16;
 const TURN_SPEED = 5;
-const GRAVITY_SNAP = 12; // how fast player snaps to terrain height
-const PLAYER_RADIUS = 2.0; // Increased footprint to prevent any clipping through rocks and trees
+const GRAVITY = 28;          // acceleration downward
+const JUMP_VELOCITY = 12;    // initial upward speed
+const PLAYER_RADIUS = 2.0;
 
 export class Player {
   readonly group: THREE.Group;
   private mixer: THREE.AnimationMixer | null = null;
   private walkAction: THREE.AnimationAction | null = null;
   private runAction: THREE.AnimationAction | null = null;
+  private jumpAction: THREE.AnimationAction | null = null;
   private wasRunning = false;
+  private isJumping = false;
+  private verticalVelocity = 0;
+  private groundY = 0;
 
   // Facing angle in world-space (radians, Y axis)
   facingAngle = 0;
@@ -33,9 +39,10 @@ export class Player {
   private async loadModel() {
     try {
       const loader = new GLTFLoader();
-      const [walkGltf, runGltf] = await Promise.all([
+      const [walkGltf, runGltf, jumpGltf] = await Promise.all([
         loader.loadAsync(turtleWalkUrl),
         loader.loadAsync(turtleRunUrl),
+        loader.loadAsync(turtleJumpUrl),
       ]);
       const model = walkGltf.scene;
 
@@ -88,13 +95,20 @@ export class Player {
       }
 
       if (runGltf.animations.length > 0) {
-        // Use the run clip from the run GLTF but target the walk model's skeleton
         this.runAction = this.mixer.clipAction(runGltf.animations[0]);
         this.runAction.play();
-        this.runAction.setEffectiveWeight(0); // start silent
+        this.runAction.setEffectiveWeight(0);
       }
 
-      console.log('Turtle loaded (walk + run)');
+      if (jumpGltf.animations.length > 0) {
+        this.jumpAction = this.mixer.clipAction(jumpGltf.animations[0]);
+        this.jumpAction.setLoop(THREE.LoopOnce, 1);
+        this.jumpAction.clampWhenFinished = true;
+        this.jumpAction.play();
+        this.jumpAction.setEffectiveWeight(0);
+      }
+
+      console.log('Turtle loaded (walk + run + jump)');
     } catch (err) {
       console.error('Failed to load turtle model:', err);
     }
@@ -118,6 +132,12 @@ export class Player {
     if (right) { moveX += Math.cos(cameraYaw); moveZ -= Math.sin(cameraYaw); }
 
     const isMoving = moveX !== 0 || moveZ !== 0;
+
+    // --- Jump ---
+    if (input.isDown('Space') && !this.isJumping) {
+      this.isJumping = true;
+      this.verticalVelocity = JUMP_VELOCITY;
+    }
 
     if (isMoving) {
       const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
@@ -171,25 +191,51 @@ export class Player {
       this.group.rotation.y = this.facingAngle;
     }
 
-    // Snap to terrain height with smooth lerp
-    const targetY = getTerrainHeight(this.group.position.x, this.group.position.z);
-    this.group.position.y += (targetY - this.group.position.y) * GRAVITY_SNAP * dt;
+    // --- Vertical physics ---
+    this.groundY = getTerrainHeight(this.group.position.x, this.group.position.z);
 
-    // Crossfade between walk and run animations
-    if (this.walkAction && this.runAction) {
-      if (isRunning && !this.wasRunning) {
+    if (this.isJumping) {
+      this.verticalVelocity -= GRAVITY * dt;
+      this.group.position.y += this.verticalVelocity * dt;
+
+      // Land when we reach the ground
+      if (this.group.position.y <= this.groundY) {
+        this.group.position.y = this.groundY;
+        this.isJumping = false;
+        this.verticalVelocity = 0;
+      }
+    } else {
+      // Smooth snap to terrain when grounded
+      this.group.position.y += (this.groundY - this.group.position.y) * 12 * dt;
+    }
+
+    // --- Animation crossfade ---
+    if (this.walkAction && this.runAction && this.jumpAction) {
+      if (this.isJumping) {
+        // Play jump animation
+        this.jumpAction.setEffectiveWeight(1);
+        this.walkAction.setEffectiveWeight(0);
+        this.runAction.setEffectiveWeight(0);
+        // Reset jump clip to play from start each time
+        if (this.jumpAction.time === 0 || !this.jumpAction.isRunning()) {
+          this.jumpAction.reset();
+          this.jumpAction.play();
+        }
+      } else if (isRunning) {
+        this.jumpAction.setEffectiveWeight(0);
         this.runAction.setEffectiveWeight(1);
         this.walkAction.setEffectiveWeight(0);
-      } else if (!isRunning && this.wasRunning) {
+      } else {
+        this.jumpAction.setEffectiveWeight(0);
         this.walkAction.setEffectiveWeight(1);
         this.runAction.setEffectiveWeight(0);
       }
       this.wasRunning = isRunning;
     }
 
-    // Update animation — play when moving, pause when idle
+    // Update animation — play when moving or jumping, pause when idle on ground
     if (this.mixer) {
-      this.mixer.timeScale = isMoving ? 1 : 0;
+      this.mixer.timeScale = (isMoving || this.isJumping) ? 1 : 0;
       this.mixer.update(dt);
     }
   }

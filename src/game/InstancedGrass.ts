@@ -48,6 +48,7 @@ export class InstancedGrass {
     clusterGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     clusterGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     clusterGeo.setAttribute('aAO', new THREE.Float32BufferAttribute(ao, 1));
+    clusterGeo.computeVertexNormals();
 
     // Load grass tile texture for natural coloring
     const tex = new THREE.TextureLoader().load(grassTexUrl);
@@ -55,70 +56,101 @@ export class InstancedGrass {
     tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;
 
-    const material = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-        uGrassTex: { value: tex },
-      },
-      vertexShader: /* glsl */ `
-        attribute float aAO;
-
-        uniform float uTime;
-        varying float vAO;
-        varying vec2 vUv;
-        varying vec2 vWorldUv;
-        varying float vDist;
-
-        void main() {
-          vUv = uv;
-          vAO = aAO;
-
-          vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
-          vWorldUv = worldPos.xz * 0.1;
-
-          // Pass camera distance for fade
-          vec4 viewPos = viewMatrix * worldPos;
-          vDist = -viewPos.z;
-
-          float windStrength = position.y / ${maxHeight.toFixed(1)};
-          windStrength *= windStrength;
-          float wave1 = sin(worldPos.x * 0.7 + worldPos.z * 0.3 + uTime * 1.8) * 0.12;
-          float wave2 = sin(worldPos.x * 0.3 + worldPos.z * 0.9 + uTime * 2.4) * 0.06;
-
-          vec3 displaced = position;
-          displaced.x += (wave1 + wave2) * windStrength;
-          displaced.z += wave2 * windStrength;
-
-          gl_Position = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(displaced, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        uniform sampler2D uGrassTex;
-        varying float vAO;
-        varying vec2 vUv;
-        varying vec2 vWorldUv;
-        varying float vDist;
-
-        void main() {
-          vec3 texColor = texture2D(uGrassTex, vWorldUv).rgb;
-          vec3 grassColor = texColor * mix(0.5, 1.2, vAO);
-
-          // Soft distance fade: grass becomes transparent and blurs into terrain
-          float fade = 1.0 - smoothstep(30.0, 80.0, vDist);
-          if (fade < 0.01) discard;
-
-          gl_FragColor = vec4(grassColor, fade);
-        }
-      `,
+    const material = new THREE.MeshLambertMaterial({
+      map: tex,
+      color: new THREE.Color(0.65, 0.82, 0.45), // slight green tint to match terrain grass
       side: THREE.DoubleSide,
       transparent: true,
       depthWrite: false,
+      alphaTest: 0.01,
     });
+
+    // Inject custom wind animation, AO, world-UV sampling, and distance fade
+    // into Three.js's built-in lighting/shadow pipeline
+    material.onBeforeCompile = (shader) => {
+      // Add custom uniforms
+      shader.uniforms.uTime = { value: 0 };
+
+      // ── Vertex shader modifications ──
+      // Declare attribute + varyings before main()
+      shader.vertexShader = shader.vertexShader.replace(
+        'void main() {',
+        `
+        attribute float aAO;
+        uniform float uTime;
+        varying float vAO;
+        varying vec2 vWorldUv;
+        varying float vDist;
+        void main() {
+        `
+      );
+
+      // Inject wind displacement + varyings after #include <begin_vertex>
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `
+        #include <begin_vertex>
+
+        vAO = aAO;
+
+        // Compute world position for wind + world UV
+        vec4 grassWorldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+        vWorldUv = grassWorldPos.xz * 0.0667; // match terrain TILE_REPEAT (20/300)
+
+        // Camera distance for fade
+        vec4 grassViewPos = viewMatrix * grassWorldPos;
+        vDist = -grassViewPos.z;
+
+        // GPU wind displacement
+        float windStrength = position.y / ${maxHeight.toFixed(1)};
+        windStrength *= windStrength;
+        float wave1 = sin(grassWorldPos.x * 0.7 + grassWorldPos.z * 0.3 + uTime * 1.8) * 0.12;
+        float wave2 = sin(grassWorldPos.x * 0.3 + grassWorldPos.z * 0.9 + uTime * 2.4) * 0.06;
+        transformed.x += (wave1 + wave2) * windStrength;
+        transformed.z += wave2 * windStrength;
+        `
+      );
+
+      // ── Fragment shader modifications ──
+      // Declare varyings before main()
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'void main() {',
+        `
+        varying float vAO;
+        varying vec2 vWorldUv;
+        varying float vDist;
+        void main() {
+        `
+      );
+
+      // After diffuse color is sampled, override with world-UV sampling + AO + fade
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `
+        // Sample grass texture using world-space UVs instead of mesh UVs
+        vec4 texelColor = texture2D( map, vWorldUv );
+        texelColor = sRGBTransferEOTF( texelColor );
+        diffuseColor *= texelColor;
+
+        // Apply AO: base of blade is slightly darker
+        diffuseColor.rgb *= mix(0.7, 1.1, vAO);
+
+        // Distance fade
+        float grassFade = 1.0 - smoothstep(30.0, 80.0, vDist);
+        if (grassFade < 0.01) discard;
+        diffuseColor.a *= grassFade;
+        `
+      );
+
+      // Store shader ref for uniform updates
+      (material as any)._grassShader = shader;
+    };
 
     // Create the InstancedMesh
     this.mesh = new THREE.InstancedMesh(clusterGeo, material, count);
     this.mesh.name = 'instanced_grass';
     this.mesh.frustumCulled = false;
+    this.mesh.receiveShadow = true;
 
     // Scatter across terrain using Perlin noise as a density map for natural patchy distribution
     const dummy = new THREE.Object3D();
@@ -179,9 +211,9 @@ export class InstancedGrass {
   }
 
   public update(time: number) {
-    const mat = this.mesh.material as THREE.ShaderMaterial;
-    if (mat?.uniforms) {
-      mat.uniforms.uTime.value = time;
+    const mat = this.mesh.material as any;
+    if (mat._grassShader?.uniforms) {
+      mat._grassShader.uniforms.uTime.value = time;
     }
   }
 }
