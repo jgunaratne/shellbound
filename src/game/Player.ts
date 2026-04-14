@@ -26,6 +26,13 @@ type MovementIntent = {
   speed: number;
 };
 
+type MovementBounds = {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
+
 export class Player {
   readonly group: THREE.Group;
   facingAngle = 0;
@@ -37,6 +44,12 @@ export class Player {
   private isJumping = false;
   private verticalVelocity = 0;
   private groundY = 0;
+  private movementBounds: MovementBounds = {
+    minX: -WORLD_BOUNDS,
+    maxX: WORLD_BOUNDS,
+    minZ: -WORLD_BOUNDS,
+    maxZ: WORLD_BOUNDS,
+  };
 
   public onMangoCollected?: () => void;
   private scene: THREE.Scene;
@@ -52,6 +65,18 @@ export class Player {
 
   get position(): THREE.Vector3 {
     return this.group.position;
+  }
+
+  setPosition(x: number, y: number, z: number) {
+    this.group.position.set(x, y, z);
+    this.groundY = y;
+    this.verticalVelocity = 0;
+    this.isJumping = false;
+  }
+
+  setMovementBounds(bounds: MovementBounds) {
+    this.movementBounds = bounds;
+    this.clampToWorld();
   }
 
   update(dt: number, input: InputManager, cameraYaw: number) {
@@ -277,8 +302,16 @@ export class Player {
   }
 
   private clampToWorld() {
-    this.group.position.x = THREE.MathUtils.clamp(this.group.position.x, -WORLD_BOUNDS, WORLD_BOUNDS);
-    this.group.position.z = THREE.MathUtils.clamp(this.group.position.z, -WORLD_BOUNDS, WORLD_BOUNDS);
+    this.group.position.x = THREE.MathUtils.clamp(
+      this.group.position.x,
+      this.movementBounds.minX,
+      this.movementBounds.maxX,
+    );
+    this.group.position.z = THREE.MathUtils.clamp(
+      this.group.position.z,
+      this.movementBounds.minZ,
+      this.movementBounds.maxZ,
+    );
   }
 
   private updateFacing(movement: MovementIntent, dt: number) {

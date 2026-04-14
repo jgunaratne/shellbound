@@ -41,6 +41,8 @@ export default function App() {
         </p>
         <p>WASD — Move</p>
         <p>Mouse — Look {locked ? '(locked)' : ''}</p>
+        <p>1 / 2 — Outdoor presets</p>
+        <p>9 — Cave scene</p>
         {!locked && <p style={{ color: '#ffdd88', marginTop: 6 }}>Click to capture mouse</p>}
       </div>
     </>

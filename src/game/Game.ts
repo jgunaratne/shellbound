@@ -12,10 +12,12 @@ import { populateEnvironment } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NpcTurtle';
 import { Minimap } from './Minimap';
+import { CAVE_BOUNDS, CAVE_SPAWN, createCaveScene } from './Cave';
 import skyUrl from '../assets/sky.png';
 import skyAfternoonUrl from '../assets/sky_afternoon.png';
 
 type PresetId = '1' | '2';
+type WorldMode = 'outdoor' | 'cave';
 
 type PresetDefinition = {
   sun: { color: number; intensity: number; position: [number, number, number] };
@@ -98,11 +100,16 @@ export class Game {
   private readonly composer: EffectComposer;
   private readonly ssaoPass: SSAOPass;
   private readonly bokehPass: BokehPass;
+  private readonly outdoorWorld: THREE.Group;
+  private readonly caveWorld: THREE.Group;
+  private readonly caveLight: THREE.PointLight;
+  private readonly caveFillLight: THREE.PointLight;
   private readonly sun: THREE.DirectionalLight;
   private readonly ambientLight: THREE.AmbientLight;
   private readonly fillLight: THREE.DirectionalLight;
   private currentPreset: PresetId = '1';
   private targetPreset: PresetId = '1';
+  private worldMode: WorldMode = 'outdoor';
   private qualityTier: QualityTier = 0;
   private basePixelRatio = 1;
   private smoothedFrameTimeMs = TARGET_FRAME_TIME_MS;
@@ -122,11 +129,18 @@ export class Game {
     this.renderer = this.createRenderer(canvas);
     this.scene = this.createScene();
     this.createSkydome(PRESETS[this.currentPreset].skyUrl);
+    this.outdoorWorld = new THREE.Group();
+    this.outdoorWorld.name = 'outdoor_world';
+    this.scene.add(this.outdoorWorld);
+    this.caveWorld = createCaveScene(CAVE_SPAWN.y);
+    this.scene.add(this.caveWorld);
 
     const lighting = this.createLighting();
     this.sun = lighting.sun;
     this.ambientLight = lighting.ambientLight;
     this.fillLight = lighting.fillLight;
+    this.caveLight = lighting.caveLight;
+    this.caveFillLight = lighting.caveFillLight;
 
     this.initializeWorld();
     this.grass = new InstancedGrass(GRASS_INSTANCE_COUNT);
@@ -138,6 +152,12 @@ export class Game {
         this.onMangoCollected();
       }
     };
+    this.player.setMovementBounds({
+      minX: -148,
+      maxX: 148,
+      minZ: -148,
+      maxZ: 148,
+    });
     this.npcTurtles = new NPCTurtleManager(this.scene);
     this.minimap = new Minimap();
     this.tpCamera = new ThirdPersonCamera();
@@ -216,13 +236,23 @@ export class Game {
     fillLight.position.set(-100, 50, -50);
     this.scene.add(fillLight);
 
-    return { sun, ambientLight, fillLight };
+    const caveLight = new THREE.PointLight(0xffb066, 0, 40, 2);
+    caveLight.position.set(-3, CAVE_SPAWN.y + 3.8, -3);
+    caveLight.castShadow = true;
+    caveLight.shadow.mapSize.set(1024, 1024);
+    this.scene.add(caveLight);
+
+    const caveFillLight = new THREE.PointLight(0x7ea6ff, 0, 36, 2);
+    caveFillLight.position.set(6, CAVE_SPAWN.y + 4.5, 6);
+    this.scene.add(caveFillLight);
+
+    return { sun, ambientLight, fillLight, caveLight, caveFillLight };
   }
 
   private initializeWorld() {
-    createTerrain(this.scene);
-    createWater(this.scene);
-    populateEnvironment(this.scene);
+    createTerrain(this.outdoorWorld);
+    createWater(this.outdoorWorld);
+    populateEnvironment(this.outdoorWorld);
   }
 
   private createPostProcessing() {
@@ -533,6 +563,52 @@ export class Game {
     }
   }
 
+  private activateOutdoorWorld(presetId: PresetId) {
+    this.worldMode = 'outdoor';
+    this.currentPreset = presetId;
+    this.outdoorWorld.visible = true;
+    this.grass.mesh.visible = true;
+    this.npcTurtles.setVisible(true);
+    this.minimap.setVisible(true);
+    this.caveWorld.visible = false;
+    this.caveLight.intensity = 0;
+    this.caveFillLight.intensity = 0;
+    this.sun.visible = true;
+    this.fillLight.visible = true;
+    if (this.skydome) {
+      this.skydome.visible = true;
+    }
+    this.player.setMovementBounds({
+      minX: -148,
+      maxX: 148,
+      minZ: -148,
+      maxZ: 148,
+    });
+    this.applyPreset(presetId);
+  }
+
+  private activateCaveWorld() {
+    this.worldMode = 'cave';
+    this.outdoorWorld.visible = false;
+    this.grass.mesh.visible = false;
+    this.npcTurtles.setVisible(false);
+    this.minimap.setVisible(false);
+    this.caveWorld.visible = true;
+    this.caveLight.intensity = 2.7;
+    this.caveFillLight.intensity = 0.8;
+    this.sun.visible = false;
+    this.fillLight.visible = false;
+    this.ambientLight.color.setHex(0x3a312c);
+    this.ambientLight.intensity = 0.5;
+    if (this.skydome) {
+      this.skydome.visible = false;
+    }
+    this.setFogColor(0x120f0d);
+    this.renderer.toneMappingExposure = 1.1;
+    this.player.setMovementBounds(CAVE_BOUNDS);
+    this.player.setPosition(CAVE_SPAWN.x, CAVE_SPAWN.y, CAVE_SPAWN.z);
+  }
+
   private setFogColor(color: number) {
     (this.scene.fog as THREE.FogExp2).color.setHex(color);
     (this.scene.background as THREE.Color).setHex(color);
@@ -590,10 +666,12 @@ export class Game {
     );
 
     this.updateSkydomePosition();
-    this.updateWaterTime(timeSeconds);
-    this.grass.update(timeSeconds);
+    if (this.worldMode === 'outdoor') {
+      this.updateWaterTime(timeSeconds);
+      this.grass.update(timeSeconds);
+      this.updatePresetLerp(dt);
+    }
     this.updateAdaptiveQuality(dt);
-    this.updatePresetLerp(dt);
     this.composer.render();
   };
 
@@ -604,12 +682,12 @@ export class Game {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (event.code === 'Digit1' && this.currentPreset !== '1') {
-      this.currentPreset = '1';
-      this.applyPreset('1');
-    } else if (event.code === 'Digit2' && this.currentPreset !== '2') {
-      this.currentPreset = '2';
-      this.applyPreset('2');
+    if (event.code === 'Digit1') {
+      this.activateOutdoorWorld('1');
+    } else if (event.code === 'Digit2') {
+      this.activateOutdoorWorld('2');
+    } else if (event.code === 'Digit9' && this.worldMode !== 'cave') {
+      this.activateCaveWorld();
     }
   };
 }

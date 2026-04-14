@@ -96,6 +96,11 @@ export class Minimap {
     this.backgroundCtx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
   }
 
+  setVisible(visible: boolean) {
+    this.visible = visible;
+    this.canvas.style.display = this.visible ? 'block' : 'none';
+  }
+
   /** Call every frame with the player's world position and facing angle */
   update(
     playerX: number,
