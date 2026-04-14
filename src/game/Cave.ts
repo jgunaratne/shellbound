@@ -2,14 +2,14 @@ import * as THREE from 'three';
 
 export const CAVE_SPAWN = new THREE.Vector3(0, 4.5, 0);
 export const CAVE_BOUNDS = {
-  minX: -16,
-  maxX: 16,
-  minZ: -18,
-  maxZ: 18,
+  minX: -28,
+  maxX: 28,
+  minZ: -30,
+  maxZ: 30,
 };
 
-const CAVE_RADIUS = 22;
-const CAVE_HEIGHT = 18;
+const CAVE_RADIUS = 34;
+const CAVE_HEIGHT = 24;
 
 function createRockGeometry(radius: number, height: number) {
   const geometry = new THREE.DodecahedronGeometry(radius, 0);
@@ -97,11 +97,11 @@ export function createCaveScene(floorY: number): THREE.Group {
   const stalagmiteGeometry = createRockGeometry(1.4, 4.8);
   const stalactiteGeometry = createRockGeometry(1.2, 5.2);
   const accentMaterial = createRockMaterial(0x7c6b59);
-  const count = 12;
+  const count = 18;
 
   for (let i = 0; i < count; i++) {
     const angle = (i / count) * Math.PI * 2;
-    const radius = 13 + (i % 3) * 2.3;
+    const radius = 20 + (i % 4) * 2.8;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
 
@@ -141,16 +141,17 @@ export function createCaveScene(floorY: number): THREE.Group {
     cave.add(ember);
   }
 
-  const fireLight = new THREE.PointLight(0xffa15a, 12, 22, 1.8);
+  const fireLight = new THREE.PointLight(0xffa15a, 12, 28, 1.8);
   fireLight.position.set(-3.2, floorY + 1.8, -3.2);
   fireLight.castShadow = true;
   fireLight.shadow.mapSize.set(1024, 1024);
   cave.add(fireLight);
 
   const lanternPositions = [
-    new THREE.Vector3(-10, floorY + 4.6, -8),
-    new THREE.Vector3(9, floorY + 5.2, -6),
-    new THREE.Vector3(7, floorY + 4.4, 9),
+    new THREE.Vector3(-18, floorY + 5.5, -12),
+    new THREE.Vector3(16, floorY + 6.4, -10),
+    new THREE.Vector3(14, floorY + 5.1, 16),
+    new THREE.Vector3(-12, floorY + 5.8, 18),
   ];
 
   for (const position of lanternPositions) {
@@ -158,12 +159,12 @@ export function createCaveScene(floorY: number): THREE.Group {
     lantern.position.copy(position);
     cave.add(lantern);
 
-    const lanternLight = new THREE.PointLight(0xffd27a, 7, 20, 2);
+    const lanternLight = new THREE.PointLight(0xffd27a, 8, 24, 2);
     lanternLight.position.copy(position);
     cave.add(lanternLight);
   }
 
-  const overheadFill = new THREE.PointLight(0xc8d6ff, 5.5, 52, 2);
+  const overheadFill = new THREE.PointLight(0xc8d6ff, 6.8, 68, 2);
   overheadFill.position.set(0, floorY + CAVE_HEIGHT - 4, 0);
   cave.add(overheadFill);
 

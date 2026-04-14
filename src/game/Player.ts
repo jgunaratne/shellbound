@@ -33,6 +33,9 @@ type MovementBounds = {
   maxZ: number;
 };
 
+type GroundHeightResolver = (x: number, z: number) => number;
+type WalkableResolver = (x: number, z: number) => boolean;
+
 export class Player {
   readonly group: THREE.Group;
   facingAngle = 0;
@@ -50,6 +53,8 @@ export class Player {
     minZ: -WORLD_BOUNDS,
     maxZ: WORLD_BOUNDS,
   };
+  private groundHeightResolver: GroundHeightResolver = getTerrainHeight;
+  private walkableResolver: WalkableResolver = (x, z) => getTerrainHeight(x, z) > WATER_LEVEL;
 
   public onMangoCollected?: () => void;
   private scene: THREE.Scene;
@@ -77,6 +82,15 @@ export class Player {
   setMovementBounds(bounds: MovementBounds) {
     this.movementBounds = bounds;
     this.clampToWorld();
+  }
+
+  setGroundingResolvers(
+    groundHeightResolver: GroundHeightResolver,
+    walkableResolver: WalkableResolver,
+  ) {
+    this.groundHeightResolver = groundHeightResolver;
+    this.walkableResolver = walkableResolver;
+    this.groundY = this.groundHeightResolver(this.group.position.x, this.group.position.z);
   }
 
   update(dt: number, input: InputManager, cameraYaw: number) {
@@ -275,7 +289,7 @@ export class Player {
   }
 
   private isWalkable(x: number, z: number): boolean {
-    return getTerrainHeight(x, z) > WATER_LEVEL;
+    return this.walkableResolver(x, z);
   }
 
   private resolveColliderOverlaps() {
@@ -332,7 +346,7 @@ export class Player {
   }
 
   private updateVerticalPosition(dt: number) {
-    this.groundY = getTerrainHeight(this.group.position.x, this.group.position.z);
+    this.groundY = this.groundHeightResolver(this.group.position.x, this.group.position.z);
 
     if (this.isJumping) {
       this.verticalVelocity -= GRAVITY * dt;

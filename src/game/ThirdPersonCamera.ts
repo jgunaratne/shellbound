@@ -9,6 +9,8 @@ const PITCH_MAX = 0.9;
 const MOUSE_SENSITIVITY = 0.003;
 const LERP_SPEED = 8;
 
+type GroundHeightResolver = (x: number, z: number) => number;
+
 export class ThirdPersonCamera {
   readonly camera: THREE.PerspectiveCamera;
   yaw = Math.PI; // start behind player
@@ -16,6 +18,7 @@ export class ThirdPersonCamera {
   private readonly offset = new THREE.Vector3();
   private readonly desiredPos = new THREE.Vector3();
   private readonly lookAtTarget = new THREE.Vector3();
+  private groundHeightResolver: GroundHeightResolver = getTerrainHeight;
 
   constructor() {
     this.camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 800);
@@ -37,7 +40,7 @@ export class ThirdPersonCamera {
     this.desiredPos.copy(target).add(this.offset);
     
     // Keep desired position above terrain
-    const terrainYAtDesired = getTerrainHeight(this.desiredPos.x, this.desiredPos.z);
+    const terrainYAtDesired = this.groundHeightResolver(this.desiredPos.x, this.desiredPos.z);
     if (this.desiredPos.y < terrainYAtDesired + 0.5) {
       this.desiredPos.y = terrainYAtDesired + 0.5;
     }
@@ -45,7 +48,7 @@ export class ThirdPersonCamera {
     this.camera.position.lerp(this.desiredPos, LERP_SPEED * dt);
 
     // Enforce immediate clamp on final lerped position
-    const actualTerrainY = getTerrainHeight(this.camera.position.x, this.camera.position.z);
+    const actualTerrainY = this.groundHeightResolver(this.camera.position.x, this.camera.position.z);
     if (this.camera.position.y < actualTerrainY + 0.5) {
       this.camera.position.y = actualTerrainY + 0.5;
     }
@@ -57,6 +60,10 @@ export class ThirdPersonCamera {
 
   get cameraYaw(): number {
     return this.yaw;
+  }
+
+  setGroundHeightResolver(resolver: GroundHeightResolver) {
+    this.groundHeightResolver = resolver;
   }
 
   onResize() {
