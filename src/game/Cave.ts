@@ -1,324 +1,381 @@
 import * as THREE from 'three';
 
-export const CAVE_SPAWN = new THREE.Vector3(0, 4.5, 0);
-
-type CaveRoom = {
-  center: THREE.Vector3;
-  radius: number;
-  shellHeight: number;
-};
-
-type CaveTunnel = {
-  start: THREE.Vector3;
-  end: THREE.Vector3;
+// ─── Layout Types ────────────────────────────────────────────────
+type DungeonRoom = {
+  id: string;
+  cx: number;
+  cz: number;
   width: number;
-  height: number;
+  depth: number;
+  ceilingHeight: number;
 };
 
-const FLOOR_Y_OFFSET = -0.02;
-
-const CAVE_ROOMS: CaveRoom[] = [
-  { center: new THREE.Vector3(0, 4.5, 0), radius: 13, shellHeight: 14 },
-  { center: new THREE.Vector3(22, 4.5, -8), radius: 10, shellHeight: 12 },
-  { center: new THREE.Vector3(18, 4.5, 20), radius: 11, shellHeight: 13 },
-  { center: new THREE.Vector3(-20, 4.5, 14), radius: 9, shellHeight: 11 },
-];
-
-const CAVE_TUNNELS: CaveTunnel[] = [
-  {
-    start: CAVE_ROOMS[0].center,
-    end: CAVE_ROOMS[1].center,
-    width: 8,
-    height: 9,
-  },
-  {
-    start: CAVE_ROOMS[1].center,
-    end: CAVE_ROOMS[2].center,
-    width: 7,
-    height: 8,
-  },
-  {
-    start: CAVE_ROOMS[0].center,
-    end: CAVE_ROOMS[3].center,
-    width: 7,
-    height: 8,
-  },
-];
-
-export const CAVE_BOUNDS = {
-  minX: -32,
-  maxX: 32,
-  minZ: -20,
-  maxZ: 32,
+type DungeonCorridor = {
+  fromRoom: string;
+  toRoom: string;
+  axis: 'x' | 'z';
+  width: number;
 };
 
-function createRockGeometry(radius: number, height: number) {
-  const geometry = new THREE.DodecahedronGeometry(radius, 0);
-  const position = geometry.attributes.position as THREE.BufferAttribute;
+// ─── Dungeon Layout ──────────────────────────────────────────────
+const FLOOR_Y = 0;
+const WALL_THICKNESS = 2.0;
+const CORRIDOR_HEIGHT = 7;
 
-  for (let i = 0; i < position.count; i++) {
-    const scale = 0.82 + Math.sin(i * 1.7) * 0.08 + Math.cos(i * 0.9) * 0.06;
-    position.setXYZ(
-      i,
-      position.getX(i) * scale,
-      position.getY(i) * (height / radius) * scale,
-      position.getZ(i) * scale,
-    );
+export const CAVE_SPAWN = new THREE.Vector3(0, FLOOR_Y, 0);
+
+const ROOMS: DungeonRoom[] = [
+  { id: 'hub',   cx: 0,   cz: 0,   width: 24, depth: 24, ceilingHeight: 12 },
+  { id: 'east',  cx: 40,  cz: 0,   width: 20, depth: 18, ceilingHeight: 10 },
+  { id: 'north', cx: 0,   cz: -40, width: 18, depth: 20, ceilingHeight: 10 },
+  { id: 'west',  cx: -40, cz: 0,   width: 20, depth: 18, ceilingHeight: 10 },
+  { id: 'south', cx: 0,   cz: 40,  width: 18, depth: 20, ceilingHeight: 10 },
+];
+
+const CORRIDORS: DungeonCorridor[] = [
+  { fromRoom: 'hub', toRoom: 'east',  axis: 'x', width: 6 },
+  { fromRoom: 'hub', toRoom: 'north', axis: 'z', width: 6 },
+  { fromRoom: 'hub', toRoom: 'west',  axis: 'x', width: 6 },
+  { fromRoom: 'hub', toRoom: 'south', axis: 'z', width: 6 },
+];
+
+// ─── Computed bounds ─────────────────────────────────────────────
+function computeBounds() {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const r of ROOMS) {
+    minX = Math.min(minX, r.cx - r.width / 2);
+    maxX = Math.max(maxX, r.cx + r.width / 2);
+    minZ = Math.min(minZ, r.cz - r.depth / 2);
+    maxZ = Math.max(maxZ, r.cz + r.depth / 2);
   }
-
-  geometry.computeVertexNormals();
-  return geometry;
+  return { minX: minX - 2, maxX: maxX + 2, minZ: minZ - 2, maxZ: maxZ + 2 };
 }
 
-function createRockMaterial(color: number) {
-  return new THREE.MeshStandardMaterial({
-    color,
-    emissive: new THREE.Color(color).multiplyScalar(0.08),
-    side: THREE.DoubleSide,
-    roughness: 0.96,
-    metalness: 0.02,
-    flatShading: true,
-  });
-}
+export const CAVE_BOUNDS = computeBounds();
 
-function createFloorMaterial() {
-  return new THREE.MeshStandardMaterial({
-    color: 0x6a5b47,
-    emissive: 0x17120e,
-    side: THREE.DoubleSide,
-    roughness: 0.98,
-    metalness: 0.02,
-  });
-}
+// ─── Resolve a corridor's geometric span ─────────────────────────
+function resolveCorridorRect(c: DungeonCorridor) {
+  const from = ROOMS.find(r => r.id === c.fromRoom)!;
+  const to = ROOMS.find(r => r.id === c.toRoom)!;
 
-function createLantern(color: number) {
-  return new THREE.Mesh(
-    new THREE.SphereGeometry(0.7, 16, 16),
-    new THREE.MeshStandardMaterial({
-      color,
-      emissive: color,
-      emissiveIntensity: 2.4,
-      roughness: 0.35,
-      metalness: 0.05,
-    }),
-  );
-}
-
-function addRoom(cave: THREE.Group, room: CaveRoom) {
-  const floor = new THREE.Mesh(
-    new THREE.CircleGeometry(room.radius, 32),
-    createFloorMaterial(),
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.set(room.center.x, room.center.y + FLOOR_Y_OFFSET, room.center.z);
-  floor.receiveShadow = true;
-  cave.add(floor);
-
-  const ceiling = new THREE.Mesh(
-    new THREE.CircleGeometry(room.radius * 0.98, 32),
-    createRockMaterial(0x3a342f),
-  );
-  ceiling.rotation.x = Math.PI / 2;
-  ceiling.position.set(room.center.x, room.center.y + room.shellHeight, room.center.z);
-  ceiling.castShadow = true;
-  ceiling.receiveShadow = true;
-  cave.add(ceiling);
-
-  const wallCount = 20;
-  const wallMaterial = createRockMaterial(0x4c4339);
-  for (let i = 0; i < wallCount; i++) {
-    const angle = (i / wallCount) * Math.PI * 2;
-    const wallWidth = room.radius * 0.42;
-    const wallThickness = 2.4;
-    const wallHeight = room.shellHeight + 1;
-    const wall = new THREE.Mesh(
-      new THREE.BoxGeometry(wallWidth, wallHeight, wallThickness),
-      wallMaterial,
-    );
-    wall.position.set(
-      room.center.x + Math.cos(angle) * room.radius,
-      room.center.y + wallHeight * 0.5,
-      room.center.z + Math.sin(angle) * room.radius,
-    );
-    wall.rotation.y = angle;
-    wall.castShadow = true;
-    wall.receiveShadow = true;
-    cave.add(wall);
+  if (c.axis === 'x') {
+    const x1 = Math.min(from.cx + from.width / 2, to.cx - to.width / 2);
+    const x2 = Math.max(from.cx + from.width / 2, to.cx - to.width / 2);
+    const midZ = (from.cz + to.cz) / 2;
+    return { x1: Math.min(x1, x2), x2: Math.max(x1, x2), z1: midZ - c.width / 2, z2: midZ + c.width / 2 };
+  } else {
+    const z1 = Math.min(from.cz + from.depth / 2, to.cz - to.depth / 2);
+    const z2 = Math.max(from.cz + from.depth / 2, to.cz - to.depth / 2);
+    const midX = (from.cx + to.cx) / 2;
+    return { x1: midX - c.width / 2, x2: midX + c.width / 2, z1: Math.min(z1, z2), z2: Math.max(z1, z2) };
   }
 }
 
-function addTunnel(cave: THREE.Group, tunnel: CaveTunnel) {
-  const direction = new THREE.Vector3().subVectors(tunnel.end, tunnel.start);
-  const length = Math.hypot(direction.x, direction.z);
-  const angle = Math.atan2(direction.x, direction.z);
-  const center = new THREE.Vector3().addVectors(tunnel.start, tunnel.end).multiplyScalar(0.5);
+// ─── Walkability ─────────────────────────────────────────────────
+export function isInsideCaveLayout(x: number, z: number): boolean {
+  const margin = 0.6;
 
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(tunnel.width, length),
-    createFloorMaterial(),
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.rotation.z = angle;
-  floor.position.set(center.x, tunnel.start.y + FLOOR_Y_OFFSET, center.z);
-  floor.receiveShadow = true;
-  cave.add(floor);
-
-  const ceiling = new THREE.Mesh(
-    new THREE.PlaneGeometry(tunnel.width, length),
-    createRockMaterial(0x3b342e),
-  );
-  ceiling.rotation.x = Math.PI / 2;
-  ceiling.rotation.z = angle;
-  ceiling.position.set(center.x, tunnel.start.y + tunnel.height, center.z);
-  ceiling.castShadow = true;
-  ceiling.receiveShadow = true;
-  cave.add(ceiling);
-
-  const wallMaterial = createRockMaterial(0x443b33);
-  for (const side of [-1, 1] as const) {
-    const wall = new THREE.Mesh(
-      new THREE.BoxGeometry(1.8, tunnel.height, length),
-      wallMaterial,
-    );
-    const offsetX = Math.cos(angle) * (tunnel.width * 0.5) * side;
-    const offsetZ = -Math.sin(angle) * (tunnel.width * 0.5) * side;
-    wall.position.set(
-      center.x + offsetX,
-      tunnel.start.y + tunnel.height * 0.5,
-      center.z + offsetZ,
-    );
-    wall.rotation.y = angle;
-    wall.castShadow = true;
-    wall.receiveShadow = true;
-    cave.add(wall);
-  }
-}
-
-function addRoomDetails(cave: THREE.Group) {
-  const stalagmiteGeometry = createRockGeometry(1.4, 4.8);
-  const stalactiteGeometry = createRockGeometry(1.2, 5.2);
-  const accentMaterial = createRockMaterial(0x7c6b59);
-  const wallMaterial = createRockMaterial(0x4c4339);
-  const detailAnchors = [
-    new THREE.Vector3(-8, 4.5, -7),
-    new THREE.Vector3(9, 4.5, 8),
-    new THREE.Vector3(24, 4.5, -12),
-    new THREE.Vector3(14, 4.5, 24),
-    new THREE.Vector3(-24, 4.5, 17),
-    new THREE.Vector3(-8, 4.5, 18),
-  ];
-
-  for (let i = 0; i < detailAnchors.length; i++) {
-    const anchor = detailAnchors[i];
-
-    const groundRock = new THREE.Mesh(stalagmiteGeometry, accentMaterial);
-    groundRock.position.set(anchor.x, anchor.y + 1.4, anchor.z);
-    groundRock.rotation.y = i * 0.6;
-    groundRock.scale.setScalar(0.9 + (i % 3) * 0.2);
-    groundRock.castShadow = true;
-    groundRock.receiveShadow = true;
-    cave.add(groundRock);
-
-    const ceilingRock = new THREE.Mesh(stalactiteGeometry, wallMaterial);
-    ceilingRock.position.set(anchor.x * 0.75, anchor.y + 9.5 + (i % 3), anchor.z * 0.75);
-    ceilingRock.rotation.set(Math.PI, i * 0.5, 0);
-    ceilingRock.scale.setScalar(0.75 + (i % 4) * 0.12);
-    ceilingRock.castShadow = true;
-    ceilingRock.receiveShadow = true;
-    cave.add(ceilingRock);
-  }
-}
-
-function addLighting(cave: THREE.Group) {
-  const emberGeometry = new THREE.SphereGeometry(0.45, 12, 12);
-  const emberMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffa14a,
-    emissive: 0xff7a1a,
-    emissiveIntensity: 1.8,
-    roughness: 0.6,
-  });
-  const emberOffsets = [
-    new THREE.Vector3(-4, 4.9, -3),
-    new THREE.Vector3(-2.6, 4.8, -1.8),
-    new THREE.Vector3(-3.2, 4.75, -4.6),
-  ];
-
-  for (const offset of emberOffsets) {
-    const ember = new THREE.Mesh(emberGeometry, emberMaterial);
-    ember.position.copy(offset);
-    cave.add(ember);
+  for (const r of ROOMS) {
+    const hw = r.width / 2 - margin;
+    const hd = r.depth / 2 - margin;
+    if (Math.abs(x - r.cx) <= hw && Math.abs(z - r.cz) <= hd) return true;
   }
 
-  const fireLight = new THREE.PointLight(0xffa15a, 13, 26, 1.8);
-  fireLight.position.set(-3.2, 6.3, -3.2);
-  fireLight.castShadow = true;
-  fireLight.shadow.mapSize.set(1024, 1024);
-  cave.add(fireLight);
-
-  const lanternPositions = [
-    new THREE.Vector3(20, 10.5, -10),
-    new THREE.Vector3(18, 10.5, 18),
-    new THREE.Vector3(-18, 9.5, 14),
-    new THREE.Vector3(5, 10, 10),
-  ];
-
-  for (const position of lanternPositions) {
-    const lantern = createLantern(0xffc56b);
-    lantern.position.copy(position);
-    cave.add(lantern);
-
-    const lanternLight = new THREE.PointLight(0xffd27a, 8.5, 22, 2);
-    lanternLight.position.copy(position);
-    cave.add(lanternLight);
-  }
-
-  const broadFill = new THREE.HemisphereLight(0xd8d6cf, 0x5b4734, 1.8);
-  broadFill.position.set(0, 18, 0);
-  cave.add(broadFill);
-}
-
-export function isInsideCaveLayout(x: number, z: number) {
-  for (const room of CAVE_ROOMS) {
-    if (Math.hypot(x - room.center.x, z - room.center.z) <= room.radius - 1.2) {
-      return true;
-    }
-  }
-
-  for (const tunnel of CAVE_TUNNELS) {
-    const ax = tunnel.start.x;
-    const az = tunnel.start.z;
-    const bx = tunnel.end.x;
-    const bz = tunnel.end.z;
-    const abx = bx - ax;
-    const abz = bz - az;
-    const apx = x - ax;
-    const apz = z - az;
-    const abLengthSq = abx * abx + abz * abz;
-    const t = THREE.MathUtils.clamp((apx * abx + apz * abz) / abLengthSq, 0, 1);
-    const closestX = ax + abx * t;
-    const closestZ = az + abz * t;
-    if (Math.hypot(x - closestX, z - closestZ) <= tunnel.width * 0.42) {
-      return true;
-    }
+  for (const c of CORRIDORS) {
+    const rect = resolveCorridorRect(c);
+    if (x >= rect.x1 + margin && x <= rect.x2 - margin &&
+        z >= rect.z1 + margin && z <= rect.z2 - margin) return true;
   }
 
   return false;
 }
 
+// ─── Materials ───────────────────────────────────────────────────
+function floorMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0x5a4e3e,
+    roughness: 0.95,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
+  });
+}
+
+function wallMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0x3e3529,
+    roughness: 0.92,
+    metalness: 0.04,
+    flatShading: true,
+    side: THREE.DoubleSide,
+  });
+}
+
+function ceilingMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0x2e2820,
+    roughness: 0.96,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+  });
+}
+
+function pillarMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0x6b5e4c,
+    roughness: 0.85,
+    metalness: 0.1,
+    flatShading: true,
+  });
+}
+
+// ─── Geometry builders ───────────────────────────────────────────
+function addFloor(group: THREE.Group, cx: number, cz: number, w: number, d: number) {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), floorMaterial());
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(cx, FLOOR_Y - 0.01, cz);
+  mesh.receiveShadow = true;
+  group.add(mesh);
+}
+
+function addCeiling(group: THREE.Group, cx: number, cz: number, w: number, d: number, h: number) {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), ceilingMaterial());
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.set(cx, FLOOR_Y + h, cz);
+  mesh.receiveShadow = true;
+  group.add(mesh);
+}
+
+function addWall(group: THREE.Group, x: number, z: number, w: number, h: number, rotY: number) {
+  const geo = new THREE.BoxGeometry(w, h, WALL_THICKNESS);
+  const mesh = new THREE.Mesh(geo, wallMaterial());
+  mesh.position.set(x, FLOOR_Y + h / 2, z);
+  mesh.rotation.y = rotY;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+}
+
+// ─── Openings tracking (so walls know where doors go) ────────────
+type Opening = { wallSide: 'north' | 'south' | 'east' | 'west'; min: number; max: number };
+
+function getOpenings(room: DungeonRoom): Opening[] {
+  const openings: Opening[] = [];
+  for (const c of CORRIDORS) {
+    const from = ROOMS.find(r => r.id === c.fromRoom)!;
+    const to = ROOMS.find(r => r.id === c.toRoom)!;
+    if (room.id !== c.fromRoom && room.id !== c.toRoom) continue;
+
+    const rect = resolveCorridorRect(c);
+
+    if (c.axis === 'x') {
+      // corridor runs along X, opening is on east or west wall
+      if (room.cx < (from.cx + to.cx) / 2) {
+        // opening on the east wall of this room
+        openings.push({ wallSide: 'east', min: rect.z1, max: rect.z2 });
+      } else {
+        openings.push({ wallSide: 'west', min: rect.z1, max: rect.z2 });
+      }
+    } else {
+      if (room.cz < (from.cz + to.cz) / 2) {
+        openings.push({ wallSide: 'south', min: rect.x1, max: rect.x2 });
+      } else {
+        openings.push({ wallSide: 'north', min: rect.x1, max: rect.x2 });
+      }
+    }
+  }
+  return openings;
+}
+
+function addRoomWalls(group: THREE.Group, room: DungeonRoom) {
+  const hw = room.width / 2;
+  const hd = room.depth / 2;
+  const h = room.ceilingHeight;
+  const openings = getOpenings(room);
+
+  // Build each of the 4 walls, splitting around openings
+  const sides: { side: 'north' | 'south' | 'east' | 'west'; axis: 'x' | 'z'; pos: number; length: number; roomCenter: number }[] = [
+    { side: 'north', axis: 'x', pos: room.cz - hd, length: room.width, roomCenter: room.cx },
+    { side: 'south', axis: 'x', pos: room.cz + hd, length: room.width, roomCenter: room.cx },
+    { side: 'east',  axis: 'z', pos: room.cx + hw, length: room.depth, roomCenter: room.cz },
+    { side: 'west',  axis: 'z', pos: room.cx - hw, length: room.depth, roomCenter: room.cz },
+  ];
+
+  for (const s of sides) {
+    const wallOpenings = openings.filter(o => o.wallSide === s.side);
+    const wallStart = s.roomCenter - s.length / 2;
+    const wallEnd = s.roomCenter + s.length / 2;
+
+    if (wallOpenings.length === 0) {
+      // Solid wall
+      if (s.axis === 'x') {
+        addWall(group, room.cx, s.pos, room.width, h, 0);
+      } else {
+        addWall(group, s.pos, room.cz, room.depth, h, Math.PI / 2);
+      }
+    } else {
+      // Split wall around openings
+      const sorted = wallOpenings.sort((a, b) => a.min - b.min);
+      let cursor = wallStart;
+      for (const op of sorted) {
+        const segLen = op.min - cursor;
+        if (segLen > 0.5) {
+          const mid = (cursor + op.min) / 2;
+          if (s.axis === 'x') {
+            addWall(group, mid, s.pos, segLen, h, 0);
+          } else {
+            addWall(group, s.pos, mid, segLen, h, Math.PI / 2);
+          }
+        }
+        cursor = op.max;
+      }
+      const tailLen = wallEnd - cursor;
+      if (tailLen > 0.5) {
+        const mid = (cursor + wallEnd) / 2;
+        if (s.axis === 'x') {
+          addWall(group, mid, s.pos, tailLen, h, 0);
+        } else {
+          addWall(group, s.pos, mid, tailLen, h, Math.PI / 2);
+        }
+      }
+    }
+  }
+}
+
+// ─── Room detail decoration ──────────────────────────────────────
+function addPillar(group: THREE.Group, x: number, z: number, height: number) {
+  const radius = 0.6;
+  const geo = new THREE.CylinderGeometry(radius, radius * 1.15, height, 8);
+  const mesh = new THREE.Mesh(geo, pillarMaterial());
+  mesh.position.set(x, FLOOR_Y + height / 2, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+
+  // Pillar cap
+  const capGeo = new THREE.CylinderGeometry(radius * 1.5, radius * 1.3, 0.4, 8);
+  const cap = new THREE.Mesh(capGeo, pillarMaterial());
+  cap.position.set(x, FLOOR_Y + height, z);
+  cap.castShadow = true;
+  group.add(cap);
+
+  // Pillar base
+  const base = new THREE.Mesh(capGeo, pillarMaterial());
+  base.position.set(x, FLOOR_Y + 0.2, z);
+  group.add(base);
+}
+
+function addTorch(group: THREE.Group, x: number, z: number, height: number) {
+  // Bracket
+  const bracketGeo = new THREE.CylinderGeometry(0.08, 0.08, 1.6, 6);
+  const bracketMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.7, metalness: 0.6 });
+  const bracket = new THREE.Mesh(bracketGeo, bracketMat);
+  bracket.position.set(x, FLOOR_Y + height, z);
+  group.add(bracket);
+
+  // Flame glow orb
+  const flameMat = new THREE.MeshStandardMaterial({
+    color: 0xffa040,
+    emissive: 0xff8020,
+    emissiveIntensity: 3.0,
+    roughness: 0.3,
+  });
+  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 8), flameMat);
+  flame.position.set(x, FLOOR_Y + height + 0.9, z);
+  group.add(flame);
+
+  // Point light
+  const light = new THREE.PointLight(0xffaa44, 6, 20, 1.8);
+  light.position.set(x, FLOOR_Y + height + 1.2, z);
+  light.castShadow = false; // limit shadow map count
+  group.add(light);
+}
+
+function decorateRoom(group: THREE.Group, room: DungeonRoom) {
+  const hw = room.width / 2;
+  const hd = room.depth / 2;
+
+  if (room.id === 'hub') {
+    // 4 pillars in the hub room
+    const inset = 4;
+    addPillar(group, room.cx - hw + inset, room.cz - hd + inset, room.ceilingHeight);
+    addPillar(group, room.cx + hw - inset, room.cz - hd + inset, room.ceilingHeight);
+    addPillar(group, room.cx - hw + inset, room.cz + hd - inset, room.ceilingHeight);
+    addPillar(group, room.cx + hw - inset, room.cz + hd - inset, room.ceilingHeight);
+
+    // Center torch cluster
+    addTorch(group, room.cx - 1.5, room.cz - 1.5, 2.5);
+    addTorch(group, room.cx + 1.5, room.cz + 1.5, 2.5);
+  } else {
+    // 2 pillars per side room
+    const inset = 3;
+    addPillar(group, room.cx - hw + inset, room.cz, room.ceilingHeight);
+    addPillar(group, room.cx + hw - inset, room.cz, room.ceilingHeight);
+
+    // Torch on far wall
+    addTorch(group, room.cx, room.cz, 2.5);
+  }
+
+  // Wall-mounted torches near corners
+  const torchInset = 1.5;
+  addTorch(group, room.cx - hw + torchInset, room.cz - hd + torchInset, 3.5);
+  addTorch(group, room.cx + hw - torchInset, room.cz + hd - torchInset, 3.5);
+}
+
+function addCorridorGeometry(group: THREE.Group, corridor: DungeonCorridor) {
+  const rect = resolveCorridorRect(corridor);
+  const w = rect.x2 - rect.x1;
+  const d = rect.z2 - rect.z1;
+  const cx = (rect.x1 + rect.x2) / 2;
+  const cz = (rect.z1 + rect.z2) / 2;
+
+  addFloor(group, cx, cz, w, d);
+  addCeiling(group, cx, cz, w, d, CORRIDOR_HEIGHT);
+
+  // Side walls of corridor
+  if (corridor.axis === 'x') {
+    // walls along Z boundaries
+    addWall(group, cx, rect.z1, w, CORRIDOR_HEIGHT, 0);
+    addWall(group, cx, rect.z2, w, CORRIDOR_HEIGHT, 0);
+  } else {
+    // walls along X boundaries
+    addWall(group, rect.x1, cz, d, CORRIDOR_HEIGHT, Math.PI / 2);
+    addWall(group, rect.x2, cz, d, CORRIDOR_HEIGHT, Math.PI / 2);
+  }
+
+  // Midpoint torch
+  addTorch(group, cx, cz, 2.5);
+}
+
+// ─── Global cave lighting ────────────────────────────────────────
+function addGlobalLighting(group: THREE.Group) {
+  const broadFill = new THREE.HemisphereLight(0xd8cfc0, 0x4a3e30, 1.4);
+  broadFill.position.set(0, 20, 0);
+  group.add(broadFill);
+
+  // Ambient to ensure nothing is pitch black
+  const ambient = new THREE.AmbientLight(0x8a7d6a, 0.6);
+  group.add(ambient);
+}
+
+// ─── Main export ─────────────────────────────────────────────────
 export function createCaveScene(): THREE.Group {
   const cave = new THREE.Group();
   cave.name = 'cave_world';
 
-  for (const room of CAVE_ROOMS) {
-    addRoom(cave, room);
+  // Build rooms
+  for (const room of ROOMS) {
+    addFloor(cave, room.cx, room.cz, room.width, room.depth);
+    addCeiling(cave, room.cx, room.cz, room.width, room.depth, room.ceilingHeight);
+    addRoomWalls(cave, room);
+    decorateRoom(cave, room);
   }
 
-  for (const tunnel of CAVE_TUNNELS) {
-    addTunnel(cave, tunnel);
+  // Build corridors
+  for (const corridor of CORRIDORS) {
+    addCorridorGeometry(cave, corridor);
   }
 
-  addRoomDetails(cave);
-  addLighting(cave);
+  addGlobalLighting(cave);
 
   return cave;
 }
