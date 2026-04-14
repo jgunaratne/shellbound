@@ -15,8 +15,9 @@ import { Minimap } from './Minimap';
 import { CAVE_BOUNDS, CAVE_SPAWN, createCaveScene } from './Cave';
 import skyUrl from '../assets/sky.png';
 import skyAfternoonUrl from '../assets/sky_afternoon.png';
+import skyNightUrl from '../assets/sky_night.png';
 
-type PresetId = '1' | '2';
+type PresetId = '1' | '2' | '3';
 type WorldMode = 'outdoor' | 'cave';
 
 type PresetDefinition = {
@@ -84,6 +85,19 @@ const PRESETS: Record<PresetId, PresetDefinition> = {
     water: {
       baseColor: [0.01, 0.03, 0.08],
       highlightColor: [0.03, 0.06, 0.15],
+    },
+  },
+  '3': {
+    sun: { color: 0x88aacc, intensity: 0.6, position: [-50, 150, -50] },
+    ambient: { color: 0x101520, intensity: 0.4 },
+    fill: { color: 0x1c2d42, intensity: 0.2 },
+    fogColor: 0x080d1a,
+    skyCapColor: 0x050811,
+    exposure: 1.1,
+    skyUrl: skyNightUrl,
+    water: {
+      baseColor: [0.002, 0.005, 0.02],
+      highlightColor: [0.01, 0.03, 0.08],
     },
   },
 };
@@ -686,6 +700,8 @@ export class Game {
       this.activateOutdoorWorld('1');
     } else if (event.code === 'Digit2') {
       this.activateOutdoorWorld('2');
+    } else if (event.code === 'Digit3') {
+      this.activateOutdoorWorld('3');
     } else if (event.code === 'Digit9' && this.worldMode !== 'cave') {
       this.activateCaveWorld();
     }
