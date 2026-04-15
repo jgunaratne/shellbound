@@ -1,16 +1,21 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { perlin2 } from './Terrain';
+import mangoShopUrl from '../assets/models/mango_shop.glb';
+import caveFloorUrl from '../assets/cave_floor.png';
+import caveWallUrl from '../assets/cave_wall.png';
+import caveCeilingUrl from '../assets/cave_ceiling.png';
 
 // ─── Layout ──────────────────────────────────────────────────────
 //
-// Rooms are CIRCLES (natural cave chambers). Corridors are wide
-// tubes connecting them. Walkability uses distance checks which
-// are far more robust than axis-aligned rect checks.
+// Rooms are SQUARES. Corridors are wide tubes connecting them.
+// Walkability uses axis-aligned bounding-box checks.
 
 type CaveRoom = {
   cx: number;
   cz: number;
-  radius: number;
+  radius: number; // half-size of the square
 };
 
 type CaveCorridor = {
@@ -20,40 +25,30 @@ type CaveCorridor = {
 };
 
 const FLOOR_Y = 0;
-const WALL_HEIGHT = 12;
+const WALL_HEIGHT = 20;
 const CORRIDOR_HEIGHT = 9;
 const PLAYER_MARGIN = 2.5;
 const FLOOR_NOISE_SCALE = 0.12;
-const FLOOR_NOISE_AMP = 0.4;
-const WALL_NOISE_AMP = 0.8;
-const WALL_SEGMENTS = 48;
+const FLOOR_NOISE_AMP = 1.8;
+const WALL_NOISE_AMP = 2.5;
 const FLOOR_SUBDIVS = 40;
 
 export const CAVE_SPAWN = new THREE.Vector3(0, FLOOR_Y, 0);
 
-// ── Rooms (circular chambers) ────────────────────────────────────
+// ── Rooms (square chambers) ──────────────────────────────────────
 export const CAVE_ROOMS: CaveRoom[] = [
-  { cx: 0,    cz: 0,    radius: 30 },  // Hub
-  { cx: 75,   cz: 0,    radius: 25 },  // East
-  { cx: 0,    cz: -75,  radius: 25 },  // North
-  { cx: -75,  cz: 0,    radius: 25 },  // West
-  { cx: 0,    cz: 75,   radius: 25 },  // South
+  { cx: 0, cz: 0, radius: 40 },  // Single large room
 ];
 
 // ── Corridors ────────────────────────────────────────────────────
-export const CAVE_CORRIDORS: CaveCorridor[] = [
-  { from: 0, to: 1, halfWidth: 6 },
-  { from: 0, to: 2, halfWidth: 6 },
-  { from: 0, to: 3, halfWidth: 6 },
-  { from: 0, to: 4, halfWidth: 6 },
-];
+export const CAVE_CORRIDORS: CaveCorridor[] = [];
 
 // ── Exported bounds ──────────────────────────────────────────────
 export const CAVE_BOUNDS = {
-  minX: -105,
-  maxX: 105,
-  minZ: -105,
-  maxZ: 105,
+  minX: -45,
+  maxX: 45,
+  minZ: -45,
+  maxZ: 45,
 };
 
 // ─── Cave ground height ─────────────────────────────────────────
@@ -64,10 +59,6 @@ export function getCaveFloorHeight(x: number, z: number): number {
 }
 
 // ─── Walkability ─────────────────────────────────────────────────
-
-function distToRoom(x: number, z: number, room: CaveRoom): number {
-  return Math.hypot(x - room.cx, z - room.cz);
-}
 
 /** Distance from point to the closest point on a line segment */
 function distToSegment(
@@ -84,9 +75,10 @@ function distToSegment(
 }
 
 export function isInsideCaveLayout(x: number, z: number): boolean {
-  // Check rooms
+  // Check rooms (axis-aligned square)
   for (const room of CAVE_ROOMS) {
-    if (distToRoom(x, z, room) <= room.radius - PLAYER_MARGIN) {
+    const hs = room.radius - PLAYER_MARGIN;
+    if (Math.abs(x - room.cx) <= hs && Math.abs(z - room.cz) <= hs) {
       return true;
     }
   }
@@ -104,64 +96,80 @@ export function isInsideCaveLayout(x: number, z: number): boolean {
 
 
 
+// ─── Textures ────────────────────────────────────────────────────
+const textureLoader = new THREE.TextureLoader();
+
+const caveFloorTexture = textureLoader.load(caveFloorUrl);
+caveFloorTexture.wrapS = THREE.RepeatWrapping;
+caveFloorTexture.wrapT = THREE.RepeatWrapping;
+caveFloorTexture.repeat.set(4, 4);
+caveFloorTexture.colorSpace = THREE.SRGBColorSpace;
+
+const caveWallTexture = textureLoader.load(caveWallUrl);
+caveWallTexture.wrapS = THREE.RepeatWrapping;
+caveWallTexture.wrapT = THREE.RepeatWrapping;
+caveWallTexture.repeat.set(3, 1);
+caveWallTexture.colorSpace = THREE.SRGBColorSpace;
+
+const caveCeilingTexture = textureLoader.load(caveCeilingUrl);
+caveCeilingTexture.wrapS = THREE.RepeatWrapping;
+caveCeilingTexture.wrapT = THREE.RepeatWrapping;
+caveCeilingTexture.repeat.set(3, 3);
+caveCeilingTexture.colorSpace = THREE.SRGBColorSpace;
+
 // ─── Materials ───────────────────────────────────────────────────
 function stoneFloorMat() {
   return new THREE.MeshStandardMaterial({
-    color: 0x564a3c,
+    map: caveFloorTexture,
     roughness: 0.94,
     metalness: 0.05,
     side: THREE.DoubleSide,
-    flatShading: true,
   });
 }
 
 function stoneWallMat() {
   return new THREE.MeshStandardMaterial({
-    color: 0x3d352a,
+    map: caveWallTexture,
     roughness: 0.92,
     metalness: 0.04,
-    flatShading: true,
     side: THREE.DoubleSide,
   });
 }
 
 function stoneCeilingMat() {
   return new THREE.MeshStandardMaterial({
-    color: 0x2b2520,
+    map: caveCeilingTexture,
     roughness: 0.96,
     metalness: 0.02,
     side: THREE.DoubleSide,
-    flatShading: true,
   });
 }
 
-// ─── Circular room geometry ──────────────────────────────────────
+// ─── Square room geometry ────────────────────────────────────────
 
 function addRoomFloor(group: THREE.Group, room: CaveRoom) {
-  const geo = new THREE.CircleGeometry(room.radius, WALL_SEGMENTS, 0, Math.PI * 2);
+  const size = room.radius * 2;
+  const geo = new THREE.PlaneGeometry(size, size, FLOOR_SUBDIVS, FLOOR_SUBDIVS);
   geo.rotateX(-Math.PI / 2);
 
-  // Subdivide for noise — use a higher-res circle
-  const hiRes = new THREE.CircleGeometry(room.radius, WALL_SEGMENTS * 2, 0, Math.PI * 2);
-  hiRes.rotateX(-Math.PI / 2);
-
-  const pos = hiRes.attributes.position as THREE.BufferAttribute;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     const wx = pos.getX(i) + room.cx;
     const wz = pos.getZ(i) + room.cz;
     pos.setY(i, getCaveFloorHeight(wx, wz) - FLOOR_Y);
   }
   pos.needsUpdate = true;
-  hiRes.computeVertexNormals();
+  geo.computeVertexNormals();
 
-  const mesh = new THREE.Mesh(hiRes, stoneFloorMat());
+  const mesh = new THREE.Mesh(geo, stoneFloorMat());
   mesh.position.set(room.cx, FLOOR_Y - 0.01, room.cz);
   mesh.receiveShadow = true;
   group.add(mesh);
 }
 
 function addRoomCeiling(group: THREE.Group, room: CaveRoom) {
-  const geo = new THREE.CircleGeometry(room.radius, WALL_SEGMENTS * 2);
+  const size = room.radius * 2;
+  const geo = new THREE.PlaneGeometry(size, size, FLOOR_SUBDIVS, FLOOR_SUBDIVS);
   geo.rotateX(Math.PI / 2);
 
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -180,95 +188,117 @@ function addRoomCeiling(group: THREE.Group, room: CaveRoom) {
   group.add(mesh);
 }
 
-function addRoomWalls(group: THREE.Group, room: CaveRoom) {
-  const roomIndex = CAVE_ROOMS.indexOf(room);
-  const heightSegs = 8;
+// ─── Square room walls ───────────────────────────────────────────
 
-  // Collect the angular ranges that need to be open (where corridors connect)
-  const openings: { center: number; halfSpan: number }[] = [];
-  for (const c of CAVE_CORRIDORS) {
-    let otherRoom: CaveRoom | null = null;
-    if (c.from === roomIndex) otherRoom = CAVE_ROOMS[c.to];
-    else if (c.to === roomIndex) otherRoom = CAVE_ROOMS[c.from];
-    if (!otherRoom) continue;
+type WallFace = 'east' | 'west' | 'north' | 'south';
 
-    const corridorAngle = Math.atan2(otherRoom.cz - room.cz, otherRoom.cx - room.cx);
-    const halfSpan = Math.atan2(c.halfWidth * 1.4, room.radius);
-    openings.push({ center: corridorAngle, halfSpan });
+/** Which face of the room does a corridor exit through? */
+function getCorridorFace(room: CaveRoom, otherRoom: CaveRoom): WallFace {
+  const dx = otherRoom.cx - room.cx;
+  const dz = otherRoom.cz - room.cz;
+  if (Math.abs(dx) > Math.abs(dz)) {
+    return dx > 0 ? 'east' : 'west';
   }
-
-  // Build wall arc segments between the openings
-  // Convert openings to sorted [start, end] ranges in [0, 2PI]
-  const ranges: { start: number; end: number }[] = openings.map(o => {
-    let s = o.center - o.halfSpan;
-    let e = o.center + o.halfSpan;
-    // Normalize to [0, 2PI]
-    while (s < 0) s += Math.PI * 2;
-    while (e < 0) e += Math.PI * 2;
-    while (s >= Math.PI * 2) s -= Math.PI * 2;
-    while (e >= Math.PI * 2) e -= Math.PI * 2;
-    return { start: s, end: e };
-  });
-
-  // Sort by start angle
-  ranges.sort((a, b) => a.start - b.start);
-
-  // Build solid arc segments in the gaps between openings
-  if (ranges.length === 0) {
-    // No openings — full cylinder
-    addWallArc(group, room, 0, Math.PI * 2, heightSegs);
-  } else {
-    // Walk around the circle building arcs in the gaps
-    for (let i = 0; i < ranges.length; i++) {
-      const gapStart = ranges[i].end;
-      const gapEnd = ranges[(i + 1) % ranges.length].start;
-
-      let arcLength = gapEnd - gapStart;
-      if (arcLength <= 0) arcLength += Math.PI * 2;
-      if (arcLength < 0.05) continue; // skip tiny slivers
-
-      addWallArc(group, room, gapStart, arcLength, heightSegs);
-    }
-  }
+  return dz > 0 ? 'south' : 'north';
 }
 
-function addWallArc(
+function addWallSegment(
   group: THREE.Group,
-  room: CaveRoom,
-  thetaStart: number,
-  thetaLength: number,
-  heightSegs: number,
+  cx: number, cy: number, cz: number,
+  width: number, height: number,
+  rotY: number,
 ) {
-  const arcSegs = Math.max(4, Math.round((thetaLength / (Math.PI * 2)) * WALL_SEGMENTS));
+  if (width < 0.1) return;
 
-  const geo = new THREE.CylinderGeometry(
-    room.radius, room.radius, WALL_HEIGHT, arcSegs, heightSegs, true,
-    thetaStart, thetaLength,
-  );
+  const segs = Math.max(2, Math.round(width / 3));
+  const geo = new THREE.PlaneGeometry(width, height, segs, 8);
 
-  // Apply Perlin noise displacement inward
+  // Perlin noise displacement along local Z (wall normal)
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
-    const lx = pos.getX(i);
-    const ly = pos.getY(i);
-    const lz = pos.getZ(i);
-
-    const angle = Math.atan2(lz, lx);
-    const n = perlin2(angle * 3 + 100, ly * 0.3 + 100);
-    const disp = n * WALL_NOISE_AMP;
-    const nx = Math.cos(angle);
-    const nz = Math.sin(angle);
-    pos.setX(i, lx - nx * disp);
-    pos.setZ(i, lz - nz * disp);
+    const n = perlin2(
+      pos.getX(i) * 0.2 + 100 + cx * 0.1,
+      pos.getY(i) * 0.3 + 100 + cz * 0.1,
+    );
+    pos.setZ(i, pos.getZ(i) + n * WALL_NOISE_AMP);
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();
 
   const mesh = new THREE.Mesh(geo, stoneWallMat());
-  mesh.position.set(room.cx, FLOOR_Y + WALL_HEIGHT / 2, room.cz);
+  mesh.position.set(cx, cy, cz);
+  mesh.rotation.y = rotY;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   group.add(mesh);
+}
+
+function addRoomWalls(group: THREE.Group, room: CaveRoom) {
+  const roomIndex = CAVE_ROOMS.indexOf(room);
+  const hs = room.radius;
+  const wallY = FLOOR_Y + WALL_HEIGHT / 2;
+
+  // Face definitions: which axis the wall runs along, its fixed position, and Y rotation
+  // Rotations chosen so normals face INWARD
+  const faceDefs: {
+    face: WallFace;
+    wallAxis: 'x' | 'z';
+    fixedValue: number;
+    rotY: number;
+  }[] = [
+    { face: 'east',  wallAxis: 'z', fixedValue: room.cx + hs, rotY: -Math.PI / 2 },
+    { face: 'west',  wallAxis: 'z', fixedValue: room.cx - hs, rotY: Math.PI / 2 },
+    { face: 'north', wallAxis: 'x', fixedValue: room.cz - hs, rotY: 0 },
+    { face: 'south', wallAxis: 'x', fixedValue: room.cz + hs, rotY: Math.PI },
+  ];
+
+  for (const fd of faceDefs) {
+    // Collect corridor openings on this face
+    const openings: { position: number; halfWidth: number }[] = [];
+
+    for (const c of CAVE_CORRIDORS) {
+      let otherRoom: CaveRoom | null = null;
+      if (c.from === roomIndex) otherRoom = CAVE_ROOMS[c.to];
+      else if (c.to === roomIndex) otherRoom = CAVE_ROOMS[c.from];
+      if (!otherRoom) continue;
+
+      if (getCorridorFace(room, otherRoom) !== fd.face) continue;
+
+      // Opening position along the wall axis (relative to room center)
+      const relPos = fd.wallAxis === 'z'
+        ? otherRoom.cz - room.cz
+        : otherRoom.cx - room.cx;
+      openings.push({ position: relPos, halfWidth: c.halfWidth });
+    }
+
+    // Sort openings along the wall
+    openings.sort((a, b) => a.position - b.position);
+
+    // Build wall segments in the gaps between openings
+    let cursor = -hs;
+    for (const op of openings) {
+      const gapStart = op.position - op.halfWidth;
+      const gapEnd = op.position + op.halfWidth;
+
+      const segWidth = gapStart - cursor;
+      if (segWidth > 0.1) {
+        const segCenter = (cursor + gapStart) / 2;
+        const sx = fd.wallAxis === 'z' ? fd.fixedValue : room.cx + segCenter;
+        const sz = fd.wallAxis === 'z' ? room.cz + segCenter : fd.fixedValue;
+        addWallSegment(group, sx, wallY, sz, segWidth, WALL_HEIGHT, fd.rotY);
+      }
+      cursor = gapEnd;
+    }
+
+    // Final segment after last opening
+    const finalWidth = hs - cursor;
+    if (finalWidth > 0.1) {
+      const segCenter = (cursor + hs) / 2;
+      const sx = fd.wallAxis === 'z' ? fd.fixedValue : room.cx + segCenter;
+      const sz = fd.wallAxis === 'z' ? room.cz + segCenter : fd.fixedValue;
+      addWallSegment(group, sx, wallY, sz, finalWidth, WALL_HEIGHT, fd.rotY);
+    }
+  }
 }
 
 // ─── Corridor geometry ───────────────────────────────────────────
@@ -323,7 +353,7 @@ function addCorridor(group: THREE.Group, corridor: CaveCorridor) {
   ceiling.receiveShadow = true;
   group.add(ceiling);
 
-  // Side walls (two curved planes along corridor length)
+  // Side walls (planes along corridor length)
   for (const side of [-1, 1]) {
     const wallGeo = new THREE.PlaneGeometry(length, CORRIDOR_HEIGHT, FLOOR_SUBDIVS, 8);
 
@@ -344,7 +374,7 @@ function addCorridor(group: THREE.Group, corridor: CaveCorridor) {
     const perpX = -Math.sin(angle - Math.PI / 2) * hw * side;
     const perpZ = -Math.cos(angle - Math.PI / 2) * hw * side;
     wall.position.set(cx + perpX, FLOOR_Y + CORRIDOR_HEIGHT / 2, cz + perpZ);
-    wall.rotation.y = angle;
+    wall.rotation.y = angle - Math.PI / 2;
     if (side === 1) wall.rotation.y += Math.PI;
     wall.castShadow = true;
     wall.receiveShadow = true;
@@ -372,28 +402,18 @@ function addWallLantern(group: THREE.Group, x: number, z: number) {
 }
 
 function decorateRoom(group: THREE.Group, room: CaveRoom) {
-  // Place lanterns around the wall perimeter
-  const lanternCount = room.radius > 28 ? 8 : 6;
-  const inset = 2.5;
-  for (let i = 0; i < lanternCount; i++) {
-    const angle = (i / lanternCount) * Math.PI * 2;
-    // Skip angles where corridors connect
-    let skipThis = false;
-    for (const c of CAVE_CORRIDORS) {
-      let otherRoom: CaveRoom | null = null;
-      if (c.from === CAVE_ROOMS.indexOf(room)) otherRoom = CAVE_ROOMS[c.to];
-      else if (c.to === CAVE_ROOMS.indexOf(room)) otherRoom = CAVE_ROOMS[c.from];
-      if (!otherRoom) continue;
-      const corridorAngle = Math.atan2(otherRoom.cz - room.cz, otherRoom.cx - room.cx);
-      let diff = angle - corridorAngle;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      if (Math.abs(diff) < 0.5) { skipThis = true; break; }
-    }
-    if (skipThis) continue;
+  const hs = room.radius;
+  const inset = 4;
 
-    const lx = room.cx + Math.cos(angle) * (room.radius - inset);
-    const lz = room.cz + Math.sin(angle) * (room.radius - inset);
+  // One lantern per corner — only 4 PointLights total
+  const corners: [number, number][] = [
+    [room.cx - hs + inset, room.cz - hs + inset],
+    [room.cx + hs - inset, room.cz - hs + inset],
+    [room.cx - hs + inset, room.cz + hs - inset],
+    [room.cx + hs - inset, room.cz + hs - inset],
+  ];
+
+  for (const [lx, lz] of corners) {
     addWallLantern(group, lx, lz);
   }
 }
@@ -416,6 +436,65 @@ function addCaveLighting(group: THREE.Group) {
   group.add(ambient);
 }
 
+// ─── Mango shop asset ────────────────────────────────────────────
+
+function loadMangoShop(group: THREE.Group) {
+  const loader = new GLTFLoader();
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+  loader.setDRACOLoader(dracoLoader);
+
+  // Place the shop in the room
+  const room = CAVE_ROOMS[0];
+
+  loader.loadAsync(mangoShopUrl)
+    .then((gltf) => {
+      const model = gltf.scene;
+
+      // Normalise model to shop scale
+      const bbox = new THREE.Box3().setFromObject(model);
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const TARGET_SIZE = 8;
+      if (maxDim > 0) {
+        const normScale = TARGET_SIZE / maxDim;
+        model.scale.multiplyScalar(normScale);
+      }
+
+      // Rotate -90 degrees
+      model.rotation.y = -Math.PI / 2;
+      model.updateMatrixWorld(true);
+
+      // Re-measure after scaling/rotation and place against the north wall
+      const scaledBox = new THREE.Box3().setFromObject(model);
+      const center = new THREE.Vector3();
+      scaledBox.getCenter(center);
+      const scaledSize = new THREE.Vector3();
+      scaledBox.getSize(scaledSize);
+      const wallInset = 2;
+      model.position.set(
+        room.cx - center.x,
+        getCaveFloorHeight(room.cx, room.cz) - scaledBox.min.y,
+        room.cz - room.radius + wallInset + scaledSize.z / 2 - center.z,
+      );
+
+      // Enable shadows
+      model.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+
+      group.add(model);
+      console.log('Mango shop loaded into cave (East room)');
+    })
+    .catch((err) => {
+      console.error('Failed to load mango shop:', err);
+    });
+}
+
 // ─── Main export ─────────────────────────────────────────────────
 export function createCaveScene(): THREE.Group {
   const cave = new THREE.Group();
@@ -434,6 +513,7 @@ export function createCaveScene(): THREE.Group {
   }
 
   addCaveLighting(cave);
+  loadMangoShop(cave);
 
   return cave;
 }

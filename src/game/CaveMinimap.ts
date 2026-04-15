@@ -3,7 +3,7 @@ import { CAVE_ROOMS, CAVE_CORRIDORS } from './Cave';
 /* ── Cave Minimap HUD ──────────────────────────────────────────────── */
 
 const MAP_SIZE = 160;
-const WORLD_EXTENT = 110; // world units from center to map edge
+const WORLD_EXTENT = 50; // world units from center to map edge
 
 export class CaveMinimap {
   private canvas: HTMLCanvasElement;
@@ -82,16 +82,14 @@ export class CaveMinimap {
       ctx.fill();
     }
 
-    // Draw rooms (filled circles)
+    // Draw rooms (filled squares)
     ctx.fillStyle = '#4a3f32';
     for (const room of CAVE_ROOMS) {
       const mx = this.worldToMap(room.cx);
       const my = this.worldToMap(room.cz);
       const mr = (room.radius / (WORLD_EXTENT * 2)) * MAP_SIZE;
 
-      ctx.beginPath();
-      ctx.arc(mx, my, mr, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(mx - mr, my - mr, mr * 2, mr * 2);
     }
 
     // Room outlines
@@ -102,9 +100,7 @@ export class CaveMinimap {
       const my = this.worldToMap(room.cz);
       const mr = (room.radius / (WORLD_EXTENT * 2)) * MAP_SIZE;
 
-      ctx.beginPath();
-      ctx.arc(mx, my, mr, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.strokeRect(mx - mr, my - mr, mr * 2, mr * 2);
     }
   }
 
