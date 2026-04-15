@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { getTerrainHeight } from './Terrain';
 import pineTreeUrl from '../assets/models/pine_tree.glb';
 import treeUrl from '../assets/models/tree.glb';
@@ -117,6 +118,10 @@ export function populateEnvironment(target: THREE.Object3D) {
   const random = createSeededRandom(42);
   const loader = new GLTFLoader();
 
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+  loader.setDRACOLoader(dracoLoader);
+
   Promise.all([
     loader.loadAsync(pineTreeUrl),
     loader.loadAsync(treeUrl),
@@ -124,7 +129,28 @@ export function populateEnvironment(target: THREE.Object3D) {
     loader.loadAsync(mangoUrl),
   ])
     .then(([pineTree, tree, rock, mango]) => {
-      const treeModels = [pineTree.scene, tree.scene];
+      // Normalise both tree models to a consistent height (~10 units).
+      const normalizeTreeModel = (scene: THREE.Object3D): THREE.Object3D => {
+        const bbox = new THREE.Box3().setFromObject(scene);
+        const height = bbox.max.y - bbox.min.y;
+        const TARGET_HEIGHT = 10;
+        if (height > 0 && Math.abs(height - TARGET_HEIGHT) > 0.5) {
+          const normScale = TARGET_HEIGHT / height;
+          scene.scale.multiplyScalar(normScale);
+          scene.updateMatrixWorld(true);
+          const adjusted = new THREE.Box3().setFromObject(scene);
+          scene.position.y -= adjusted.min.y;
+          const container = new THREE.Group();
+          container.add(scene);
+          return container;
+        }
+        return scene;
+      };
+
+      const treeModels = [
+        normalizeTreeModel(pineTree.scene),
+        normalizeTreeModel(tree.scene),
+      ];
       const baseRock = rock.scene;
       const baseMango = mango.scene;
 
@@ -172,7 +198,7 @@ function scatterRocks(
 
     const rock = baseRock.clone();
     const scale = 0.4 + random() * 1.2;
-    rock.position.set(x, terrainY - scale * 1.8, z);
+    rock.position.set(x, terrainY - scale * 0.8, z);
     rock.scale.setScalar(scale);
     rock.rotation.y = random() * Math.PI * 2;
 
@@ -237,6 +263,7 @@ function scatterMangos(
   baseMango: THREE.Object3D,
   random: () => number,
 ) {
+  const PLAYER_R = 2.0; // must match Player's PLAYER_RADIUS
   for (let i = 0; i < MANGO_COUNT; i++) {
     const x = randomWorldCoordinate(random);
     const z = randomWorldCoordinate(random);
@@ -246,10 +273,20 @@ function scatterMangos(
       continue;
     }
 
+    // Skip positions inside or too close to tree/rock colliders — the player's
+    // collision resolution would push them away before the pickup check runs.
+    const nearby = queryNearbyColliders(x, z, PLAYER_R + 4);
+    let blocked = false;
+    for (const c of nearby) {
+      if (Math.hypot(x - c.x, z - c.z) < c.radius + PLAYER_R + 1.0) {
+        blocked = true;
+        break;
+      }
+    }
+    if (blocked) continue;
+
     const mango = baseMango.clone() as MangoObject;
-    // Make mangos smaller
     const scale = 0.3 + random() * 0.3;
-    // Raise them slightly above the terrain to sit neatly on the grass
     mango.position.set(x, terrainY + 0.3, z);
     mango.scale.setScalar(scale);
     mango.rotation.y = random() * Math.PI * 2;

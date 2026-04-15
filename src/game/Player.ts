@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { getTerrainHeight } from './Terrain';
 import { queryNearbyColliders, mangos, collectMango } from './Environment';
 import type { InputManager } from './InputManager';
@@ -108,19 +109,33 @@ export class Player {
     this.checkMangoCollection();
   }
 
+  private _debugTimer = 0;
+
   private checkMangoCollection() {
+    const px = this.group.position.x;
+    const pz = this.group.position.z;
+
+    // Debug: log nearest mango distance once per second
+    this._debugTimer++;
+    if (this._debugTimer % 60 === 0 && mangos.length > 0) {
+      let minDist = Infinity;
+      for (const m of mangos) {
+        const d = Math.hypot(px - m.position.x, pz - m.position.z);
+        if (d < minDist) minDist = d;
+      }
+      console.log(`[mango debug] count=${mangos.length} nearest=${minDist.toFixed(1)} playerXZ=(${px.toFixed(1)}, ${pz.toFixed(1)})`);
+    }
+
     for (let i = mangos.length - 1; i >= 0; i--) {
       const m = mangos[i];
-      const dist = Math.hypot(
-        this.group.position.x - m.position.x,
-        this.group.position.z - m.position.z,
-      );
+      const dx = px - m.position.x;
+      const dz = pz - m.position.z;
 
-      if (dist < 1.5) {
-        if (collectMango(i, this.scene)) {
-          if (this.onMangoCollected) {
-            this.onMangoCollected();
-          }
+      if (dx * dx + dz * dz < 25) { // 5 unit radius (squared)
+        console.log(`[mango] Collected! index=${i} dist=${Math.sqrt(dx*dx+dz*dz).toFixed(2)} mango=(${m.position.x.toFixed(1)},${m.position.z.toFixed(1)})`);
+        collectMango(i, this.scene);
+        if (this.onMangoCollected) {
+          this.onMangoCollected();
         }
       }
     }
@@ -129,6 +144,9 @@ export class Player {
   private async loadModel() {
     try {
       const loader = new GLTFLoader();
+      const dracoLoader = new DRACOLoader();
+      dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+      loader.setDRACOLoader(dracoLoader);
       const [walkGltf, runGltf, jumpGltf] = await Promise.all([
         loader.loadAsync(turtleWalkUrl),
         loader.loadAsync(turtleRunUrl),

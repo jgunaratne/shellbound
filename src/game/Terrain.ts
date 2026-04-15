@@ -179,7 +179,7 @@ export function createTerrain(target: THREE.Object3D): THREE.Mesh {
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
   // ── Clean, straight UV coordinates ────
-  const TILE_REPEAT = 20; // Higher repeat = smaller tiles = sharper detail per tile
+  const TILE_REPEAT = 10; // Lower repeat = larger tiles
 
   const uvAttr = geometry.attributes.uv as THREE.BufferAttribute;
   for (let i = 0; i < uvAttr.count; i++) {
@@ -285,22 +285,77 @@ export function createTerrain(target: THREE.Object3D): THREE.Mesh {
     metalness: 0.0
   });
 
-  // Keep the terrain shader light: a single texture read plus subtle macro variation.
+  // Anti-repetition tiling shader — ports key techniques from generate_tiles.py:
+  // 1. Per-cell random UV rotation/flip (Python's transforms array)
+  // 2. Dual-sample blending with golden-ratio offsets (Python's _wrap_crop)
+  // 3. Fractal interior mask (Python's make_interior_mask)
+  // 4. Per-cell brightness jitter
+  // 5. Macro brightness variation (existing)
   material.onBeforeCompile = (shader) => {
+    // Prepend all shared GLSL utility functions before the fragment main()
     shader.fragmentShader = `
-      // Smooth value noise for macro variation
-      float _tileHash(vec2 p) {
+      // ── Hash functions (match Python _hash2d) ──────────────────────────
+      float _cellHash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
       }
-      float _tileNoise(vec2 p) {
+      vec2 _cellHash2(vec2 p) {
+          return vec2(
+              _cellHash(p),
+              _cellHash(p + vec2(73.156, 41.235))
+          );
+      }
+
+      // ── Value noise (matches Python value_noise_2d) ────────────────────
+      float _valNoise(vec2 p) {
           vec2 i = floor(p);
           vec2 f = fract(p);
-          vec2 u = f * f * (3.0 - 2.0 * f);
+          vec2 u = f * f * (3.0 - 2.0 * f);  // smoothstep
+          float n00 = _cellHash(i);
+          float n10 = _cellHash(i + vec2(1.0, 0.0));
+          float n01 = _cellHash(i + vec2(0.0, 1.0));
+          float n11 = _cellHash(i + vec2(1.0, 1.0));
           return mix(
-              mix(_tileHash(i), _tileHash(i + vec2(1.0, 0.0)), u.x),
-              mix(_tileHash(i + vec2(0.0, 1.0)), _tileHash(i + vec2(1.0, 1.0)), u.x),
+              mix(n00, n10, u.x),
+              mix(n01, n11, u.x),
               u.y
           );
+      }
+
+      // ── Fractal interior mask (port of Python make_interior_mask) ──────
+      // Distance-from-edge field + 4-octave noise distortion for organic
+      // blend boundaries between tile cells
+      float _interiorMask(vec2 uv, float margin) {
+          vec2 f = fract(uv);
+          // Distance from nearest cell edge, normalised to [0, ~0.5]
+          float d = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+          // 4 octaves of noise for fractal boundary distortion
+          // (matches Python: scale 3,6,12,24 with weights 1, 0.5, 0.25, 0.125)
+          float n = _valNoise(f * 3.0 + uv * 0.1) * 1.0
+                  + _valNoise(f * 6.0 + uv * 0.2) * 0.5
+                  + _valNoise(f * 12.0 + uv * 0.3) * 0.25
+                  + _valNoise(f * 24.0 + uv * 0.4) * 0.125;
+          n /= 1.875;  // normalise
+          // Distort distance field (matches Python: ±35% of margin)
+          d += (n - 0.5) * margin * 0.65;
+          float t = clamp(d / margin, 0.0, 1.0);
+          // Cosine-squared ramp (matches Python: sin(t*pi/2)^2)
+          float s = sin(t * 1.5707963);
+          return s * s;
+      }
+
+      // ── Per-cell UV transform (port of Python transforms array) ────────
+      // Applies random 0°/90°/180°/270° rotation + optional horizontal flip
+      vec2 _transformUV(vec2 cellFrac, vec2 cell) {
+          float h = _cellHash(cell * vec2(17.31, 13.73));
+          int rot = int(h * 4.0);
+          vec2 c = cellFrac - 0.5;
+          // Rotation (matches Python: identity, flip-H, flip-V, rotate-180)
+          if (rot == 1) c = vec2(-c.y, c.x);
+          else if (rot == 2) c = vec2(-c.x, -c.y);
+          else if (rot == 3) c = vec2(c.y, -c.x);
+          // Optional flip (matches Python: if rng > 0.7 flip)
+          if (_cellHash(cell + 100.0) > 0.7) c.x = -c.x;
+          return c + 0.5;
       }
     ` + shader.fragmentShader;
 
@@ -308,18 +363,38 @@ export function createTerrain(target: THREE.Object3D): THREE.Mesh {
     shader.fragmentShader = shader.fragmentShader.replace(
       /vec4 sampledDiffuseColor = texture2D\( map, vMapUv \);/,
       `
-      vec4 sampledDiffuseColor = texture2D(map, vMapUv);
+      // ── Anti-repetition tiling (ported from generate_tiles.py) ─────────
+      vec2 _tileCell = floor(vMapUv);
+      vec2 _tileFrac = fract(vMapUv);
 
-      // Macro brightness variation
-      float macro = mix(0.90, 1.10,
-          _tileNoise(vMapUv * 0.04 + vec2(5.3, 7.1)) * 0.6 +
-          _tileNoise(vMapUv * 0.09 + vec2(23.7, 41.9)) * 0.4
+      // Primary sample: per-cell rotated/flipped UVs
+      vec2 _uv1 = _transformUV(_tileFrac, _tileCell);
+      vec4 _sample1 = texture2D(map, _uv1);
+
+      // Secondary sample: golden-ratio offset crop (matches Python _wrap_crop
+      // with PHI-based spacing for maximum spatial separation)
+      vec2 _offset = _cellHash2(_tileCell) * 0.618;
+      vec2 _uv2 = _transformUV(fract(_tileFrac + _offset), _tileCell + 37.0);
+      vec4 _sample2 = texture2D(map, _uv2);
+
+      // Blend with fractal interior mask
+      // (center of cell uses primary sample, edges blend to secondary)
+      float _blendMask = _interiorMask(vMapUv, 0.18);
+      vec4 sampledDiffuseColor = mix(_sample2, _sample1, _blendMask);
+
+      // Per-cell brightness jitter ±5% (matches Python: (rng-0.5)*0.05)
+      sampledDiffuseColor.rgb *= 1.0 + (_cellHash(_tileCell + 200.0) - 0.5) * 0.1;
+
+      // Macro brightness variation (low-frequency landscape-scale shading)
+      float _macro = mix(0.92, 1.08,
+          _valNoise(vMapUv * 0.04 + vec2(5.3, 7.1)) * 0.6 +
+          _valNoise(vMapUv * 0.09 + vec2(23.7, 41.9)) * 0.4
       );
-      sampledDiffuseColor.rgb *= macro;
+      sampledDiffuseColor.rgb *= _macro;
       `
     );
     if (shader.fragmentShader === original) {
-      console.warn('⚠️ Terrain shader: tile overlap replacement did NOT match!');
+      console.warn('⚠️ Terrain shader: anti-repetition replacement did NOT match!');
     }
   };
 
