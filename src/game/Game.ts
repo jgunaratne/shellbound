@@ -710,7 +710,7 @@ export class Game {
     this.lastTime = time;
 
     this.player.update(dt, this.input, this.tpCamera.cameraYaw);
-    this.npcTurtles.update(dt);
+    this.npcTurtles.update(dt, this.player.position.x, this.player.position.z);
     this.tpCamera.update(dt, this.player.position, this.input);
 
     this.minimap.update(

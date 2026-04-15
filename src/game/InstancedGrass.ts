@@ -123,24 +123,87 @@ export class InstancedGrass {
       );
 
       // ── Fragment shader modifications ──
-      // Declare varyings before main()
+      // Prepend anti-repetition GLSL utilities + varyings before main()
       shader.fragmentShader = shader.fragmentShader.replace(
         'void main() {',
         `
         varying float vAO;
         varying vec2 vWorldUv;
         varying float vDist;
+
+        // ── Anti-repetition utilities (shared with terrain shader) ────────
+        float _cellHash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+        }
+        vec2 _cellHash2(vec2 p) {
+            return vec2(_cellHash(p), _cellHash(p + vec2(73.156, 41.235)));
+        }
+        float _valNoise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            float n00 = _cellHash(i);
+            float n10 = _cellHash(i + vec2(1.0, 0.0));
+            float n01 = _cellHash(i + vec2(0.0, 1.0));
+            float n11 = _cellHash(i + vec2(1.0, 1.0));
+            return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
+        }
+        float _interiorMask(vec2 uv, float margin) {
+            vec2 f = fract(uv);
+            float d = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+            float n = _valNoise(f * 3.0 + uv * 0.1) * 1.0
+                    + _valNoise(f * 6.0 + uv * 0.2) * 0.5
+                    + _valNoise(f * 12.0 + uv * 0.3) * 0.25
+                    + _valNoise(f * 24.0 + uv * 0.4) * 0.125;
+            n /= 1.875;
+            d += (n - 0.5) * margin * 0.65;
+            float t = clamp(d / margin, 0.0, 1.0);
+            float s = sin(t * 1.5707963);
+            return s * s;
+        }
+        vec2 _transformUV(vec2 cellFrac, vec2 cell) {
+            float h = _cellHash(cell * vec2(17.31, 13.73));
+            int rot = int(h * 4.0);
+            vec2 c = cellFrac - 0.5;
+            if (rot == 1) c = vec2(-c.y, c.x);
+            else if (rot == 2) c = vec2(-c.x, -c.y);
+            else if (rot == 3) c = vec2(c.y, -c.x);
+            if (_cellHash(cell + 100.0) > 0.7) c.x = -c.x;
+            return c + 0.5;
+        }
+
         void main() {
         `
       );
 
-      // After diffuse color is sampled, override with world-UV sampling + AO + fade
+      // After diffuse color is sampled, override with anti-repetition
+      // world-UV sampling + AO + fade
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <map_fragment>',
         `
-        // Sample grass texture using world-space UVs instead of mesh UVs
-        vec4 texelColor = texture2D( map, vWorldUv );
-        texelColor = sRGBTransferEOTF( texelColor );
+        // ── Anti-repetition grass sampling (matches terrain) ─────────────
+        // Convert world UVs to tile grid coordinates (same grid as terrain)
+        // vWorldUv is already scaled to match terrain TILE_REPEAT
+        vec2 _gCell = floor(vWorldUv);
+        vec2 _gFrac = fract(vWorldUv);
+
+        // Primary sample: per-cell rotated/flipped UVs
+        vec2 _gUv1 = _transformUV(_gFrac, _gCell);
+        vec4 _gSample1 = texture2D(map, _gUv1);
+
+        // Secondary sample: golden-ratio offset
+        vec2 _gOffset = _cellHash2(_gCell) * 0.618;
+        vec2 _gUv2 = _transformUV(fract(_gFrac + _gOffset), _gCell + 37.0);
+        vec4 _gSample2 = texture2D(map, _gUv2);
+
+        // Blend with fractal interior mask
+        float _gMask = _interiorMask(vWorldUv, 0.18);
+        vec4 texelColor = mix(_gSample2, _gSample1, _gMask);
+        texelColor = sRGBTransferEOTF(texelColor);
+
+        // Per-cell brightness jitter ±5%
+        texelColor.rgb *= 1.0 + (_cellHash(_gCell + 200.0) - 0.5) * 0.1;
+
         diffuseColor *= texelColor;
 
         // Apply AO: base of blade is slightly darker

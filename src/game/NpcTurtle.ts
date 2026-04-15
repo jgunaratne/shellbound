@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { getTerrainHeight } from './Terrain';
 import {
@@ -110,7 +111,7 @@ class SingleNPC {
     this.stateTimer = IDLE_TIME_MIN + this.rand() * (IDLE_TIME_MAX - IDLE_TIME_MIN);
   }
 
-  update(dt: number) {
+  update(dt: number, playerX: number, playerZ: number) {
     this.stateTimer -= dt;
 
     if (this.state === 'idle') {
@@ -181,6 +182,22 @@ class SingleNPC {
           }
         }
 
+        // Avoid walking through the player
+        {
+          const pdx = this.group.position.x - playerX;
+          const pdz = this.group.position.z - playerZ;
+          const pDistSq = pdx * pdx + pdz * pdz;
+          const pMinDist = NPC_RADIUS + 2.0; // player radius ~2
+          if (pDistSq < pMinDist * pMinDist) {
+            const pDist = Math.sqrt(pDistSq);
+            if (pDist > 0.0001) {
+              const overlap = pMinDist - pDist;
+              this.group.position.x += (pdx / pDist) * overlap;
+              this.group.position.z += (pdz / pDist) * overlap;
+            }
+          }
+        }
+
         // Clamp to terrain bounds
         this.group.position.x = THREE.MathUtils.clamp(this.group.position.x, -TERRAIN_HALF, TERRAIN_HALF);
         this.group.position.z = THREE.MathUtils.clamp(this.group.position.z, -TERRAIN_HALF, TERRAIN_HALF);
@@ -244,6 +261,9 @@ export class NPCTurtleManager {
   private async load() {
     try {
       const loader = new GLTFLoader();
+      const dracoLoader = new DRACOLoader();
+      dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+      loader.setDRACOLoader(dracoLoader);
       const gltf = await loader.loadAsync(turtleWalkUrl);
       const baseModel = gltf.scene;
 
@@ -299,11 +319,11 @@ export class NPCTurtleManager {
     }
   }
 
-  update(dt: number) {
+  update(dt: number, playerX: number, playerZ: number) {
     if (!this.loaded || !this.visible) return;
     for (let i = 0; i < this.npcs.length; i++) {
       const npc = this.npcs[i];
-      npc.update(dt);
+      npc.update(dt, playerX, playerZ);
       this.positionBuffer[i].x = npc.group.position.x;
       this.positionBuffer[i].z = npc.group.position.z;
     }
