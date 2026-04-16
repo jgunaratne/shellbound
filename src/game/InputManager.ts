@@ -4,6 +4,7 @@ export class InputManager {
   private keys: Set<string> = new Set();
   private mouseDeltaX = 0;
   private mouseDeltaY = 0;
+  private wheelDelta = 0;
   private _pointerLocked = false;
   private canvas: HTMLCanvasElement;
 
@@ -18,12 +19,14 @@ export class InputManager {
     this.onMouseMove = this.onMouseMove.bind(this);
     this.onPointerLockChange = this.onPointerLockChange.bind(this);
     this.onClick = this.onClick.bind(this);
+    this.onWheel = this.onWheel.bind(this);
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     document.addEventListener('mousemove', this.onMouseMove);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
     canvas.addEventListener('click', this.onClick);
+    window.addEventListener('wheel', this.onWheel, { passive: false });
   }
 
   private onClick() {
@@ -60,6 +63,14 @@ export class InputManager {
     }
   }
 
+  private onWheel(e: WheelEvent) {
+    // Only consume wheel events when pointer is locked (game is active)
+    if (this._pointerLocked) {
+      this.wheelDelta += e.deltaY;
+      e.preventDefault(); // prevent page scroll
+    }
+  }
+
   isDown(code: string): boolean {
     return this.keys.has(code);
   }
@@ -68,6 +79,12 @@ export class InputManager {
     const d = { x: this.mouseDeltaX, y: this.mouseDeltaY };
     this.mouseDeltaX = 0;
     this.mouseDeltaY = 0;
+    return d;
+  }
+
+  consumeWheelDelta(): number {
+    const d = this.wheelDelta;
+    this.wheelDelta = 0;
     return d;
   }
 
@@ -85,5 +102,6 @@ export class InputManager {
     document.removeEventListener('mousemove', this.onMouseMove);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     this.canvas.removeEventListener('click', this.onClick);
+    window.removeEventListener('wheel', this.onWheel);
   }
 }

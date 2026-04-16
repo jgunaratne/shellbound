@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { InputManager } from './InputManager';
 import { getTerrainHeight } from './Terrain';
 
-const DISTANCE = 7;
 const HEIGHT_OFFSET = 2.0;
 const PITCH_MIN = -0.4;
 const PITCH_MAX = 0.9;
@@ -15,6 +14,7 @@ export class ThirdPersonCamera {
   readonly camera: THREE.PerspectiveCamera;
   yaw = Math.PI; // start behind player
   pitch = 0.1;
+  private distance = 7;
   private readonly offset = new THREE.Vector3();
   private readonly desiredPos = new THREE.Vector3();
   private readonly lookAtTarget = new THREE.Vector3();
@@ -30,11 +30,15 @@ export class ThirdPersonCamera {
     this.pitch -= mouse.y * MOUSE_SENSITIVITY;
     this.pitch  = THREE.MathUtils.clamp(this.pitch, PITCH_MIN, PITCH_MAX);
 
+    const wheel = input.consumeWheelDelta();
+    this.distance += wheel * 0.005; // sensitivity
+    this.distance = THREE.MathUtils.clamp(this.distance, 3, 25); // clamp zoom
+
     // Desired position behind and above player
     this.offset.set(
-      Math.sin(this.yaw) * Math.cos(this.pitch) * DISTANCE,
-      Math.sin(this.pitch) * DISTANCE + HEIGHT_OFFSET,
-      Math.cos(this.yaw) * Math.cos(this.pitch) * DISTANCE,
+      Math.sin(this.yaw) * Math.cos(this.pitch) * this.distance,
+      Math.sin(this.pitch) * this.distance + HEIGHT_OFFSET,
+      Math.cos(this.yaw) * Math.cos(this.pitch) * this.distance,
     );
 
     this.desiredPos.copy(target).add(this.offset);

@@ -159,6 +159,8 @@ export function populateEnvironment(target: THREE.Object3D) {
       scatterTrees(target, treeModels, random);
 
       mangos.length = 0; // Clear exactly before scattering to defeat any duplicate async race conditions
+      cachedBaseMango = baseMango;
+      cachedTarget = target;
       scatterMangos(target, baseMango, random);
 
       console.log('Trees, rocks, and mangos loaded and scattered');
@@ -237,6 +239,26 @@ function scatterTrees(
 }
 
 export const mangos: MangoObject[] = [];
+
+// Cached for respawning
+let cachedBaseMango: THREE.Object3D | null = null;
+let cachedTarget: THREE.Object3D | null = null;
+let respawnSeed = 100;
+
+export function respawnMangos() {
+  if (!cachedBaseMango || !cachedTarget) return;
+
+  // Remove any leftover mango meshes
+  for (const m of mangos) {
+    if (m.parent) m.parent.remove(m);
+  }
+  mangos.length = 0;
+
+  // Re-scatter with a different seed each round
+  respawnSeed += 1;
+  const random = createSeededRandom(respawnSeed);
+  scatterMangos(cachedTarget, cachedBaseMango, random);
+}
 
 export function collectMango(index: number, scene: THREE.Scene): boolean {
   const mango = mangos[index];
