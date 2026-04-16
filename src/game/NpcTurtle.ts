@@ -8,6 +8,8 @@ import {
   registerCollider,
   updateCollider,
   type Collider,
+  mangos,
+  collectMango,
 } from './Environment';
 import turtleWalkUrl from '../assets/models/turtle_walking.glb';
 
@@ -22,6 +24,11 @@ const IDLE_TIME_MIN = 2;
 const IDLE_TIME_MAX = 5;
 const WANDER_RADIUS = 30; // how far a wander target can be from current pos
 const NPC_RADIUS = 1.5;
+
+const TURTLE_NAMES = [
+  'Shelly', 'Mochi', 'Gizmo', 'Pepper', 'Kiwi', 'Bubbles', 'Clover',
+  'Maple', 'Nugget', 'Pebble',
+];
 
 /* ── Seeded RNG (deterministic placement) ───────────────────────────── */
 
@@ -61,6 +68,10 @@ function createLitMaterial(material: THREE.Material): THREE.MeshStandardMaterial
 /* ── Single NPC ─────────────────────────────────────────────────────── */
 
 class SingleNPC {
+  readonly id: number;
+  readonly name: string;
+  private mangoCount = 0;
+  private scene: THREE.Scene;
   readonly group: THREE.Group;
   private mixer: THREE.AnimationMixer | null = null;
   private facingAngle: number;
@@ -77,7 +88,13 @@ class SingleNPC {
     x: number,
     z: number,
     seed: number,
+    id: number,
+    name: string,
+    scene: THREE.Scene,
   ) {
+    this.id = id;
+    this.name = name;
+    this.scene = scene;
     this.rand = seededRng(seed);
     this.facingAngle = this.rand() * Math.PI * 2;
 
@@ -109,6 +126,14 @@ class SingleNPC {
 
     // Start idle for a random duration
     this.stateTimer = IDLE_TIME_MIN + this.rand() * (IDLE_TIME_MAX - IDLE_TIME_MIN);
+  }
+
+  getScore() {
+    return this.mangoCount;
+  }
+
+  resetScore() {
+    this.mangoCount = 0;
   }
 
   update(dt: number, playerX: number, playerZ: number) {
@@ -204,6 +229,35 @@ class SingleNPC {
       }
     }
 
+    // Check mango collection
+    const px = this.group.position.x;
+    const pz = this.group.position.z;
+
+    // Debug: log nearest mango distance periodically
+    if (this.id === 0 && mangos.length > 0 && Math.random() < 0.02) {
+      let minDist = Infinity;
+      for (const m of mangos) {
+        const d = Math.hypot(px - m.position.x, pz - m.position.z);
+        if (d < minDist) minDist = d;
+      }
+      console.log(`[NPC ${this.name}] pos=(${px.toFixed(1)},${pz.toFixed(1)}) nearest mango=${minDist.toFixed(1)} mangos=${mangos.length} state=${this.state}`);
+    }
+
+    for (let i = mangos.length - 1; i >= 0; i--) {
+      const m = mangos[i];
+      const dx = px - m.position.x;
+      const dz = pz - m.position.z;
+      const distSq = dx * dx + dz * dz;
+
+      if (distSq < 25) { // 5 unit radius (squared)
+        console.log(`[NPC ${this.name}] Collecting mango! dist=${Math.sqrt(distSq).toFixed(2)}`);
+        if (collectMango(i, this.scene)) {
+          this.mangoCount++;
+          console.log(`[NPC ${this.name}] Score: ${this.mangoCount}`);
+        }
+      }
+    }
+
     // Snap to terrain height
     const terrainY = getTerrainHeight(this.group.position.x, this.group.position.z);
     this.group.position.y += (terrainY - this.group.position.y) * 12 * dt;
@@ -216,6 +270,26 @@ class SingleNPC {
   }
 
   private pickWanderTarget() {
+    // Seek nearest mango if within range
+    let nearestMango = null;
+    let minDist = 40; // seeking radius
+    for (const m of mangos) {
+      const dx = this.group.position.x - m.position.x;
+      const dz = this.group.position.z - m.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestMango = m;
+      }
+    }
+
+    if (nearestMango) {
+      this.targetX = nearestMango.position.x;
+      this.targetZ = nearestMango.position.z;
+      this.stateTimer = 10; // timeout
+      return;
+    }
+
     // Try up to 10 random points; accept the first one on dry land
     for (let attempt = 0; attempt < 10; attempt++) {
       const angle = this.rand() * Math.PI * 2;
@@ -306,7 +380,8 @@ export class NPCTurtleManager {
           )
         );
 
-        const npc = new SingleNPC(baseModel, clip, x, z, 7000 + i * 131);
+        const name = TURTLE_NAMES[i % TURTLE_NAMES.length];
+        const npc = new SingleNPC(baseModel, clip, x, z, 7000 + i * 131, i, name, this.scene);
         this.npcs.push(npc);
         this.positionBuffer.push({ x, z });
         this.scene.add(npc.group);
@@ -339,5 +414,15 @@ export class NPCTurtleManager {
   /** Return world positions of all NPCs (for minimap, etc.) */
   getPositions(): readonly { x: number; z: number }[] {
     return this.positionBuffer;
+  }
+
+  getScores(): { id: number; name: string; score: number }[] {
+    return this.npcs.map(npc => ({ id: npc.id, name: npc.name, score: npc.getScore() }));
+  }
+
+  resetScores() {
+    for (const npc of this.npcs) {
+      npc.resetScore();
+    }
   }
 }

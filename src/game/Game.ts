@@ -8,7 +8,7 @@ import { InputManager } from './InputManager';
 import { Player } from './Player';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
 import { createTerrain, createWater, getTerrainHeight, waterMaterial, lakeMaterial } from './Terrain';
-import { populateEnvironment } from './Environment';
+import { populateEnvironment, mangos, respawnMangos } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NpcTurtle';
 import { Minimap } from './Minimap';
@@ -128,6 +128,8 @@ export class Game {
   private currentPreset: PresetId = '1';
   private targetPreset: PresetId = '1';
   private worldMode: WorldMode = 'outdoor';
+  private gameTime = 12.0; // Start at noon (hours)
+  private timeScale = 120.0; // 1 real second = 2 game minutes. ~12 min = full day.
   private qualityTier: QualityTier = 0;
   private basePixelRatio = 1;
   private smoothedFrameTimeMs = TARGET_FRAME_TIME_MS;
@@ -142,6 +144,12 @@ export class Game {
   private lastTime = 0;
 
   public onMangoCollected?: () => void;
+  public onNpcScoresUpdated?: (scores: { id: number; name: string; score: number }[]) => void;
+  public onMangosRemainingUpdated?: (remaining: number) => void;
+  public onTimeUpdated?: (timeStr: string, period: string) => void;
+  private prevNpcScores: { id: number; name: string; score: number }[] | null = null;
+  private prevMangosRemaining = -1;
+  private prevTimeMinute = -1;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = this.createRenderer(canvas);
@@ -218,6 +226,15 @@ export class Game {
     this.bokehPass.dispose();
     this.composer.dispose();
     this.renderer.dispose();
+  }
+
+  restartMangoGame() {
+    this.npcTurtles.resetScores();
+    this.prevNpcScores = null;
+    this.prevMangosRemaining = -1;
+    this.gameTime = 12.0; // Reset to noon
+    this.prevTimeMinute = -1;
+    respawnMangos();
   }
 
   private createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
@@ -597,11 +614,62 @@ export class Game {
     }
   }
 
-  private activateOutdoorWorld(presetId: PresetId) {
+  private updateTime(dt: number) {
+    this.gameTime += (dt * this.timeScale) / 3600;
+    if (this.gameTime >= 24) {
+      this.gameTime -= 24;
+    }
+
+    // Report formatted time to UI (every game-minute)
+    const totalMinutes = Math.floor(this.gameTime * 60);
+    if (totalMinutes !== this.prevTimeMinute) {
+      this.prevTimeMinute = totalMinutes;
+      if (this.onTimeUpdated) {
+        const h = Math.floor(this.gameTime);
+        const m = Math.floor((this.gameTime - h) * 60);
+        const hour12 = h % 12 || 12;
+        const ampm = h < 12 ? 'AM' : 'PM';
+        const timeStr = `${hour12}:${m.toString().padStart(2, '0')} ${ampm}`;
+        let period = 'Day';
+        if (this.gameTime >= 17 && this.gameTime < 22) period = 'Afternoon';
+        else if (this.gameTime >= 22 || this.gameTime < 4) period = 'Night';
+        this.onTimeUpdated(timeStr, period);
+      }
+    }
+
+    // Only drive preset transitions when outdoors
+    if (this.worldMode !== 'outdoor') return;
+
+    // Map time to presets:
+    // Day: 4 a.m. to 5 p.m. (4:00 - 17:00) -> Preset '1'
+    // Afternoon: 5 p.m. to 10 p.m. (17:00 - 22:00) -> Preset '2'
+    // Night: 10 p.m. to 4 a.m. (22:00 - 4:00) -> Preset '3'
+    let targetPreset: PresetId = '1';
+    if (this.gameTime >= 4 && this.gameTime < 17) {
+      targetPreset = '1';
+    } else if (this.gameTime >= 17 && this.gameTime < 22) {
+      targetPreset = '2';
+    } else {
+      targetPreset = '3';
+    }
+
+    if (targetPreset !== this.targetPreset) {
+      this.applyPreset(targetPreset);
+    }
+  }
+
+  private getTimeBasedPreset(): PresetId {
+    if (this.gameTime >= 4 && this.gameTime < 17) return '1';
+    if (this.gameTime >= 17 && this.gameTime < 22) return '2';
+    return '3';
+  }
+
+  private activateOutdoorWorld(presetId?: PresetId) {
+    const effectivePreset = presetId ?? this.getTimeBasedPreset();
     this.worldMode = 'outdoor';
     this.activeScene = this.outdoorScene;
     this.outdoorWorld.visible = true;
-    this.currentPreset = presetId;
+    this.currentPreset = effectivePreset;
     this.outdoorScene.add(this.player.group);
     this.npcTurtles.setVisible(true);
     this.minimap.setVisible(true);
@@ -618,7 +686,7 @@ export class Game {
       this.isOutdoorWalkable,
     );
     this.tpCamera.setGroundHeightResolver(this.getOutdoorGroundHeight);
-    this.applyPreset(presetId);
+    this.applyPreset(effectivePreset);
   }
 
   private activateCaveWorld() {
@@ -714,6 +782,43 @@ export class Game {
 
     this.player.update(dt, this.input, this.tpCamera.cameraYaw);
     this.npcTurtles.update(dt, this.player.position.x, this.player.position.z);
+    this.updateTime(dt);
+
+    // Check for NPC score updates
+    const currentNpcScores = this.npcTurtles.getScores();
+    let scoresChanged = false;
+    if (!this.prevNpcScores || this.prevNpcScores.length !== currentNpcScores.length) {
+      scoresChanged = true;
+    } else {
+      for (let i = 0; i < currentNpcScores.length; i++) {
+        if (currentNpcScores[i].score !== this.prevNpcScores[i].score) {
+          scoresChanged = true;
+          break;
+        }
+      }
+    }
+    if (scoresChanged) {
+      this.prevNpcScores = currentNpcScores;
+      if (this.onNpcScoresUpdated) {
+        this.onNpcScoresUpdated(currentNpcScores);
+      }
+    }
+
+    // Report remaining mangos (only after mangos have actually been loaded)
+    const remaining = mangos.length;
+    if (remaining > 0 && this.prevMangosRemaining === -1) {
+      // First time seeing mangos — they just finished loading
+      this.prevMangosRemaining = remaining;
+      if (this.onMangosRemainingUpdated) {
+        this.onMangosRemainingUpdated(remaining);
+      }
+    } else if (this.prevMangosRemaining > 0 && remaining !== this.prevMangosRemaining) {
+      this.prevMangosRemaining = remaining;
+      if (this.onMangosRemainingUpdated) {
+        this.onMangosRemainingUpdated(remaining);
+      }
+    }
+
     this.tpCamera.update(dt, this.player.position, this.input);
 
     this.minimap.update(
@@ -745,12 +850,8 @@ export class Game {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (event.code === 'Digit1') {
-      this.activateOutdoorWorld('1');
-    } else if (event.code === 'Digit2') {
-      this.activateOutdoorWorld('2');
-    } else if (event.code === 'Digit3') {
-      this.activateOutdoorWorld('3');
+    if (event.code === 'Digit1' || event.code === 'Digit2' || event.code === 'Digit3') {
+      this.activateOutdoorWorld();
     } else if (event.code === 'Digit9' && this.worldMode !== 'cave') {
       this.activateCaveWorld();
     }
