@@ -96,26 +96,34 @@ export function isInsideCaveLayout(x: number, z: number): boolean {
 
 
 
-// ─── Textures ────────────────────────────────────────────────────
+// ─── Textures & Materials (lazy-loaded on first use) ─────────────
 const textureLoader = new THREE.TextureLoader();
 
-const caveFloorTexture = textureLoader.load(caveFloorUrl);
-caveFloorTexture.wrapS = THREE.RepeatWrapping;
-caveFloorTexture.wrapT = THREE.RepeatWrapping;
-caveFloorTexture.repeat.set(4, 4);
-caveFloorTexture.colorSpace = THREE.SRGBColorSpace;
+let caveFloorTexture: THREE.Texture | null = null;
+let caveWallTexture: THREE.Texture | null = null;
+let caveCeilingTexture: THREE.Texture | null = null;
 
-const caveWallTexture = textureLoader.load(caveWallUrl);
-caveWallTexture.wrapS = THREE.RepeatWrapping;
-caveWallTexture.wrapT = THREE.RepeatWrapping;
-caveWallTexture.repeat.set(3, 1);
-caveWallTexture.colorSpace = THREE.SRGBColorSpace;
+function ensureTextures() {
+  if (caveFloorTexture) return; // already loaded
 
-const caveCeilingTexture = textureLoader.load(caveCeilingUrl);
-caveCeilingTexture.wrapS = THREE.RepeatWrapping;
-caveCeilingTexture.wrapT = THREE.RepeatWrapping;
-caveCeilingTexture.repeat.set(3, 3);
-caveCeilingTexture.colorSpace = THREE.SRGBColorSpace;
+  caveFloorTexture = textureLoader.load(caveFloorUrl);
+  caveFloorTexture.wrapS = THREE.RepeatWrapping;
+  caveFloorTexture.wrapT = THREE.RepeatWrapping;
+  caveFloorTexture.repeat.set(4, 4);
+  caveFloorTexture.colorSpace = THREE.SRGBColorSpace;
+
+  caveWallTexture = textureLoader.load(caveWallUrl);
+  caveWallTexture.wrapS = THREE.RepeatWrapping;
+  caveWallTexture.wrapT = THREE.RepeatWrapping;
+  caveWallTexture.repeat.set(3, 1);
+  caveWallTexture.colorSpace = THREE.SRGBColorSpace;
+
+  caveCeilingTexture = textureLoader.load(caveCeilingUrl);
+  caveCeilingTexture.wrapS = THREE.RepeatWrapping;
+  caveCeilingTexture.wrapT = THREE.RepeatWrapping;
+  caveCeilingTexture.repeat.set(3, 3);
+  caveCeilingTexture.colorSpace = THREE.SRGBColorSpace;
+}
 
 // ─── Materials ───────────────────────────────────────────────────
 function stoneFloorMat() {
@@ -497,6 +505,7 @@ function loadMangoShop(group: THREE.Group) {
 
 // ─── Main export ─────────────────────────────────────────────────
 export function createCaveScene(): THREE.Group {
+  ensureTextures();
   const cave = new THREE.Group();
   cave.name = 'cave_world';
 
