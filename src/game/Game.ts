@@ -121,7 +121,7 @@ export class Game {
   private ssaoPass: SSAOPass;
   private bokehPass: BokehPass;
   private readonly outdoorWorld: THREE.Group;
-  private readonly caveWorld: THREE.Group;
+  private caveWorld: THREE.Group | null = null;
   private readonly outdoorSun: THREE.DirectionalLight;
   private readonly outdoorAmbientLight: THREE.AmbientLight;
   private readonly outdoorFillLight: THREE.DirectionalLight;
@@ -151,8 +151,6 @@ export class Game {
     this.outdoorWorld = new THREE.Group();
     this.outdoorWorld.name = 'outdoor_world';
     this.outdoorScene.add(this.outdoorWorld);
-    this.caveWorld = createCaveScene();
-    this.caveScene.add(this.caveWorld);
     this.createSkydome(PRESETS[this.currentPreset].skyUrl);
 
     const outdoorLighting = this.createOutdoorLighting();
@@ -626,6 +624,11 @@ export class Game {
   private activateCaveWorld() {
     this.worldMode = 'cave';
     this.activeScene = this.caveScene;
+    // Lazily create cave geometry + assets on first entry
+    if (!this.caveWorld) {
+      this.caveWorld = createCaveScene();
+      this.caveScene.add(this.caveWorld);
+    }
     this.caveWorld.visible = true;
     this.caveScene.add(this.player.group);
     this.npcTurtles.setVisible(false);
