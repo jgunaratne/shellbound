@@ -12,18 +12,41 @@ import {
   collectMango,
 } from './Environment';
 import turtleWalkUrl from '../assets/models/turtle_walking.glb';
+import turtleRunUrl from '../assets/models/turtle_running.glb';
 
 /* ── Constants ──────────────────────────────────────────────────────── */
 
-const NPC_WALK_SPEED = 3.5;
-const NPC_TURN_SPEED = 3;
-const NPC_COUNT = 7;
+let npcWalkSpeed = 5;
+let npcRunSpeed = 13;
+let npcTurnSpeed = 5;
+let npcCount = 7;
 const TERRAIN_HALF = 130; // stay well inside the 150-unit terrain bounds
 const WATER_LEVEL = -1.9;
-const IDLE_TIME_MIN = 2;
-const IDLE_TIME_MAX = 5;
+let idleTimeMin = 0.1;
+let idleTimeMax = 0.5;
 const WANDER_RADIUS = 30; // how far a wander target can be from current pos
 const NPC_RADIUS = 1.5;
+let mangoSeekRadius = 80; // how far NPCs will detect and sprint toward mangos
+const STUCK_CHECK_INTERVAL = 1.5; // seconds between stuck checks
+const STUCK_DISTANCE_THRESHOLD = 2.0; // units — if moved less than this, consider stuck
+
+export type NpcConfig = {
+  count: number;
+  walkSpeed: number;
+  runSpeed: number;
+  idleMin: number;
+  idleMax: number;
+  seekRadius: number;
+};
+
+export function setNpcConfig(cfg: NpcConfig) {
+  npcCount = cfg.count;
+  npcWalkSpeed = cfg.walkSpeed;
+  npcRunSpeed = cfg.runSpeed;
+  idleTimeMin = cfg.idleMin;
+  idleTimeMax = cfg.idleMax;
+  mangoSeekRadius = cfg.seekRadius;
+}
 
 const TURTLE_NAMES = [
   'Shelly', 'Mochi', 'Gizmo', 'Pepper', 'Kiwi', 'Bubbles', 'Clover',
@@ -74,6 +97,9 @@ class SingleNPC {
   private scene: THREE.Scene;
   readonly group: THREE.Group;
   private mixer: THREE.AnimationMixer | null = null;
+  private walkAction: THREE.AnimationAction | null = null;
+  private runAction: THREE.AnimationAction | null = null;
+  private isRunning = false;
   private facingAngle: number;
   private state: NPCState = 'idle';
   private stateTimer = 0;
@@ -81,10 +107,14 @@ class SingleNPC {
   private targetZ = 0;
   private rand: () => number;
   private collider: Collider;
+  private stuckTimer = 0;
+  private lastCheckX = 0;
+  private lastCheckZ = 0;
 
   constructor(
     model: THREE.Group,
-    clip: THREE.AnimationClip,
+    walkClip: THREE.AnimationClip,
+    runClip: THREE.AnimationClip,
     x: number,
     z: number,
     seed: number,
@@ -119,13 +149,19 @@ class SingleNPC {
     this.collider = { x, z, radius: NPC_RADIUS };
     registerCollider(this.collider);
 
-    // Set up animation mixer on the cloned model
+    // Set up animation mixer on the cloned model with walk + run blending
     this.mixer = new THREE.AnimationMixer(clone);
-    const action = this.mixer.clipAction(clip);
-    action.play();
+    this.walkAction = this.mixer.clipAction(walkClip);
+    this.walkAction.play();
+    this.walkAction.setEffectiveWeight(1);
+    this.runAction = this.mixer.clipAction(runClip);
+    this.runAction.play();
+    this.runAction.setEffectiveWeight(0);
 
     // Start idle for a random duration
-    this.stateTimer = IDLE_TIME_MIN + this.rand() * (IDLE_TIME_MAX - IDLE_TIME_MIN);
+    this.stateTimer = idleTimeMin + this.rand() * (idleTimeMax - idleTimeMin);
+    this.lastCheckX = x;
+    this.lastCheckZ = z;
   }
 
   getScore() {
@@ -134,6 +170,10 @@ class SingleNPC {
 
   resetScore() {
     this.mangoCount = 0;
+  }
+
+  reregisterCollider() {
+    registerCollider(this.collider);
   }
 
   update(dt: number, playerX: number, playerZ: number) {
@@ -149,8 +189,37 @@ class SingleNPC {
         this.state = 'wander';
       }
     } else {
-      // Wander toward target
+      // Wander / run toward target
       if (this.mixer) this.mixer.timeScale = 1;
+
+      // ── Stuck detection ──
+      this.stuckTimer += dt;
+      if (this.stuckTimer >= STUCK_CHECK_INTERVAL) {
+        const movedX = this.group.position.x - this.lastCheckX;
+        const movedZ = this.group.position.z - this.lastCheckZ;
+        const movedDist = Math.sqrt(movedX * movedX + movedZ * movedZ);
+        this.lastCheckX = this.group.position.x;
+        this.lastCheckZ = this.group.position.z;
+        this.stuckTimer = 0;
+
+        if (movedDist < STUCK_DISTANCE_THRESHOLD) {
+          // Stuck — abandon target and pick a random escape direction
+          this.pickRandomWanderTarget();
+        }
+      }
+
+      // Blend walk/run animations based on running state
+      if (this.walkAction && this.runAction) {
+        if (this.isRunning) {
+          this.walkAction.setEffectiveWeight(0);
+          this.runAction.setEffectiveWeight(1);
+        } else {
+          this.walkAction.setEffectiveWeight(1);
+          this.runAction.setEffectiveWeight(0);
+        }
+      }
+
+      const currentSpeed = this.isRunning ? npcRunSpeed : npcWalkSpeed;
 
       const dx = this.targetX - this.group.position.x;
       const dz = this.targetZ - this.group.position.z;
@@ -159,19 +228,19 @@ class SingleNPC {
       if (dist < 1.5 || this.stateTimer <= 0) {
         // Arrived or timed out → go idle
         this.state = 'idle';
-        this.stateTimer = IDLE_TIME_MIN + this.rand() * (IDLE_TIME_MAX - IDLE_TIME_MIN);
+        this.stateTimer = idleTimeMin + this.rand() * (idleTimeMax - idleTimeMin);
       } else {
         // Turn toward target
         const targetAngle = Math.atan2(dx, dz);
         let diff = targetAngle - this.facingAngle;
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
-        this.facingAngle += diff * NPC_TURN_SPEED * dt;
+        this.facingAngle += diff * npcTurnSpeed * dt;
         this.group.rotation.y = this.facingAngle;
 
         // Move forward
-        const moveX = Math.sin(this.facingAngle) * NPC_WALK_SPEED * dt;
-        const moveZ = Math.cos(this.facingAngle) * NPC_WALK_SPEED * dt;
+        const moveX = Math.sin(this.facingAngle) * currentSpeed * dt;
+        const moveZ = Math.cos(this.facingAngle) * currentSpeed * dt;
         const nextX = this.group.position.x + moveX;
         const nextZ = this.group.position.z + moveZ;
 
@@ -180,9 +249,8 @@ class SingleNPC {
           this.group.position.x = nextX;
           this.group.position.z = nextZ;
         } else {
-          // Hit water — stop and pick a new target next frame
-          this.state = 'idle';
-          this.stateTimer = 0.5;
+          // Hit water — immediately pick a new random direction (not mango-seeking)
+          this.pickRandomWanderTarget();
         }
 
         // Avoid colliders (rocks, trees) — skip our own collider
@@ -249,7 +317,7 @@ class SingleNPC {
       const dz = pz - m.position.z;
       const distSq = dx * dx + dz * dz;
 
-      if (distSq < 25) { // 5 unit radius (squared)
+      if (distSq < 49) { // 7 unit radius (squared)
         console.log(`[NPC ${this.name}] Collecting mango! dist=${Math.sqrt(distSq).toFixed(2)}`);
         if (collectMango(i, this.scene)) {
           this.mangoCount++;
@@ -270,14 +338,31 @@ class SingleNPC {
   }
 
   private pickWanderTarget() {
-    // Seek nearest mango if within range
+    // Seek nearest reachable mango within range
     let nearestMango = null;
-    let minDist = 40; // seeking radius
+    let minDist = mangoSeekRadius;
+    const px = this.group.position.x;
+    const pz = this.group.position.z;
+
     for (const m of mangos) {
-      const dx = this.group.position.x - m.position.x;
-      const dz = this.group.position.z - m.position.z;
+      const dx = px - m.position.x;
+      const dz = pz - m.position.z;
       const dist = Math.hypot(dx, dz);
       if (dist < minDist) {
+        // Check if path to mango is walkable (no water crossings)
+        let reachable = true;
+        const steps = 5;
+        for (let s = 1; s < steps; s++) {
+          const t = s / steps;
+          const sx = px + (m.position.x - px) * t;
+          const sz = pz + (m.position.z - pz) * t;
+          if (getTerrainHeight(sx, sz) < WATER_LEVEL) {
+            reachable = false;
+            break;
+          }
+        }
+        if (!reachable) continue;
+
         minDist = dist;
         nearestMango = m;
       }
@@ -287,6 +372,7 @@ class SingleNPC {
       this.targetX = nearestMango.position.x;
       this.targetZ = nearestMango.position.z;
       this.stateTimer = 10; // timeout
+      this.isRunning = true; // sprint toward mango!
       return;
     }
 
@@ -306,6 +392,7 @@ class SingleNPC {
         this.targetX = tx;
         this.targetZ = tz;
         this.stateTimer = 8 + this.rand() * 6; // max wander time before forcing idle
+        this.isRunning = false; // casual wander at walk speed
         return;
       }
     }
@@ -314,6 +401,41 @@ class SingleNPC {
     this.targetX = (this.rand() - 0.5) * 60;
     this.targetZ = (this.rand() - 0.5) * 60;
     this.stateTimer = 10;
+    this.isRunning = false;
+  }
+
+  /** Pick a purely random direction — used to escape stuck/water situations (skips mango seeking) */
+  private pickRandomWanderTarget() {
+    // Reset stuck checkpoint so we get a fresh measurement period
+    this.lastCheckX = this.group.position.x;
+    this.lastCheckZ = this.group.position.z;
+    this.stuckTimer = 0;
+
+    // Try up to 10 random points; accept the first one on dry land
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const angle = this.rand() * Math.PI * 2;
+      const radius = 10 + this.rand() * WANDER_RADIUS;
+      const tx = this.group.position.x + Math.cos(angle) * radius;
+      const tz = this.group.position.z + Math.sin(angle) * radius;
+
+      if (
+        Math.abs(tx) < TERRAIN_HALF &&
+        Math.abs(tz) < TERRAIN_HALF &&
+        getTerrainHeight(tx, tz) > WATER_LEVEL
+      ) {
+        this.targetX = tx;
+        this.targetZ = tz;
+        this.stateTimer = 6 + this.rand() * 4;
+        this.isRunning = false;
+        return;
+      }
+    }
+
+    // Fallback: head toward center
+    this.targetX = (this.rand() - 0.5) * 60;
+    this.targetZ = (this.rand() - 0.5) * 60;
+    this.stateTimer = 8;
+    this.isRunning = false;
   }
 }
 
@@ -323,9 +445,12 @@ export class NPCTurtleManager {
   private npcs: SingleNPC[] = [];
   private loaded = false;
   private visible = true;
-  private readonly positionBuffer: { x: number; z: number }[] = [];
+  private positionBuffer: { x: number; z: number }[] = [];
 
   private scene: THREE.Scene;
+  private baseModel: THREE.Group | null = null;
+  private walkClip: THREE.AnimationClip | null = null;
+  private runClip: THREE.AnimationClip | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -339,10 +464,10 @@ export class NPCTurtleManager {
       dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
       loader.setDRACOLoader(dracoLoader);
       const gltf = await loader.loadAsync(turtleWalkUrl);
-      const baseModel = gltf.scene;
+      this.baseModel = gltf.scene;
 
       // Fix materials to match the player's look
-      baseModel.traverse((child) => {
+      this.baseModel.traverse((child) => {
         const mesh = child as THREE.Mesh;
         if (mesh.isMesh) {
           mesh.geometry.computeVertexNormals();
@@ -356,42 +481,64 @@ export class NPCTurtleManager {
         }
       });
 
-      const clip = gltf.animations[0];
-      if (!clip) {
-        console.warn('NPC turtle: no walk animation clip found');
+      const runGltf = await loader.loadAsync(turtleRunUrl);
+
+      this.walkClip = gltf.animations[0];
+      this.runClip = runGltf.animations[0];
+      if (!this.walkClip || !this.runClip) {
+        console.warn('NPC turtle: missing walk or run animation clip');
         return;
       }
 
-      // Deterministic spawn positions using a seeded RNG
-      const rand = seededRng(999);
-      for (let i = 0; i < NPC_COUNT; i++) {
-        // Find a valid spawn point on dry land, away from the player spawn and lake
-        let x: number, z: number;
-        let attempts = 0;
-        do {
-          x = (rand() - 0.5) * TERRAIN_HALF * 2;
-          z = (rand() - 0.5) * TERRAIN_HALF * 2;
-          attempts++;
-        } while (
-          attempts < 50 &&
-          (
-            getTerrainHeight(x, z) < WATER_LEVEL + 1 || // well above water
-            Math.sqrt(x * x + z * z) < 30              // away from player spawn
-          )
-        );
-
-        const name = TURTLE_NAMES[i % TURTLE_NAMES.length];
-        const npc = new SingleNPC(baseModel, clip, x, z, 7000 + i * 131, i, name, this.scene);
-        this.npcs.push(npc);
-        this.positionBuffer.push({ x, z });
-        this.scene.add(npc.group);
-      }
-
+      this.spawnNpcs();
       this.loaded = true;
-      console.log(`${NPC_COUNT} NPC turtles spawned and roaming`);
+      console.log(`${npcCount} NPC turtles spawned and roaming`);
     } catch (err) {
       console.error('Failed to load NPC turtle:', err);
     }
+  }
+
+  private spawnNpcs() {
+    if (!this.baseModel || !this.walkClip || !this.runClip) return;
+
+    // Deterministic spawn positions using a seeded RNG
+    const rand = seededRng(999);
+    for (let i = 0; i < npcCount; i++) {
+      // Find a valid spawn point on dry land, away from the player spawn and lake
+      let x: number, z: number;
+      let attempts = 0;
+      do {
+        x = (rand() - 0.5) * TERRAIN_HALF * 2;
+        z = (rand() - 0.5) * TERRAIN_HALF * 2;
+        attempts++;
+      } while (
+        attempts < 50 &&
+        (
+          getTerrainHeight(x, z) < WATER_LEVEL + 1 || // well above water
+          Math.sqrt(x * x + z * z) < 30              // away from player spawn
+        )
+      );
+
+      const name = TURTLE_NAMES[i % TURTLE_NAMES.length];
+      const npc = new SingleNPC(this.baseModel, this.walkClip, this.runClip, x, z, 7000 + i * 131, i, name, this.scene);
+      this.npcs.push(npc);
+      this.positionBuffer.push({ x, z });
+      this.scene.add(npc.group);
+    }
+  }
+
+  /** Remove all NPCs and respawn with current npcCount config */
+  recreate() {
+    // Remove existing NPCs from scene
+    for (const npc of this.npcs) {
+      this.scene.remove(npc.group);
+    }
+    this.npcs = [];
+    this.positionBuffer = [];
+
+    // Respawn with current config
+    this.spawnNpcs();
+    console.log(`[NPCTurtleManager] Recreated with ${npcCount} turtles`);
   }
 
   update(dt: number, playerX: number, playerZ: number) {
@@ -423,6 +570,13 @@ export class NPCTurtleManager {
   resetScores() {
     for (const npc of this.npcs) {
       npc.resetScore();
+    }
+  }
+
+  /** Re-insert all NPC colliders into the spatial grid (after environment clear) */
+  reregisterColliders() {
+    for (const npc of this.npcs) {
+      npc.reregisterCollider();
     }
   }
 }

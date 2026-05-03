@@ -7,8 +7,8 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { InputManager } from './InputManager';
 import { Player } from './Player';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
-import { createTerrain, createWater, getTerrainHeight, waterMaterial, lakeMaterial } from './Terrain';
-import { populateEnvironment, mangos, respawnMangos } from './Environment';
+import { createTerrain, createWater, getTerrainHeight, waterMaterial, lakeMaterial, setTerrainSeed } from './Terrain';
+import { populateEnvironment, clearEnvironment, mangos } from './Environment';
 import { InstancedGrass } from './InstancedGrass';
 import { NPCTurtleManager } from './NpcTurtle';
 import { Minimap } from './Minimap';
@@ -28,6 +28,7 @@ type PresetDefinition = {
   fogColor: number;
   skyCapColor: number;
   exposure: number;
+  shadowIntensity: number;
   skyUrl: string;
   water: {
     baseColor: [number, number, number];
@@ -70,6 +71,7 @@ const PRESETS: Record<PresetId, PresetDefinition> = {
     fogColor: 0xc9d8f0,
     skyCapColor: 0xc9d8f0,
     exposure: 1.4,
+    shadowIntensity: 1.0,
     skyUrl,
     water: {
       baseColor: [0.01, 0.04, 0.12],
@@ -83,6 +85,7 @@ const PRESETS: Record<PresetId, PresetDefinition> = {
     fogColor: 0xd4a574,
     skyCapColor: 0xc49060,
     exposure: 1.35,
+    shadowIntensity: 0.5,
     skyUrl: skyAfternoonUrl,
     water: {
       baseColor: [0.01, 0.03, 0.08],
@@ -96,6 +99,7 @@ const PRESETS: Record<PresetId, PresetDefinition> = {
     fogColor: 0x1b283c,
     skyCapColor: 0x10192b,
     exposure: 1.32,
+    shadowIntensity: 0.3,
     skyUrl: skyNightUrl,
     water: {
       baseColor: [0.008, 0.015, 0.04],
@@ -111,7 +115,7 @@ export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly input: InputManager;
   private readonly player: Player;
-  private readonly grass: InstancedGrass;
+  private grass: InstancedGrass;
   private readonly npcTurtles: NPCTurtleManager;
   private readonly minimap: Minimap;
   private readonly caveMinimap: CaveMinimap;
@@ -129,7 +133,7 @@ export class Game {
   private targetPreset: PresetId = '1';
   private worldMode: WorldMode = 'outdoor';
   private gameTime = 12.0; // Start at noon (hours)
-  private timeScale = 120.0; // 1 real second = 2 game minutes. ~12 min = full day.
+  private timeScale = 240.0; // 1 real second = 4 game minutes. ~6 min = full day.
   private qualityTier: QualityTier = 0;
   private basePixelRatio = 1;
   private smoothedFrameTimeMs = TARGET_FRAME_TIME_MS;
@@ -142,6 +146,7 @@ export class Game {
   private skyCapMaterial: THREE.MeshBasicMaterial | null = null;
   private animId = 0;
   private lastTime = 0;
+  private mapSeed = 42;
 
   public onMangoCollected?: () => void;
   public onNpcScoresUpdated?: (scores: { id: number; name: string; score: number }[]) => void;
@@ -229,12 +234,54 @@ export class Game {
   }
 
   restartMangoGame() {
+    this.regenerateOutdoorWorld();
+  }
+
+  /** Regenerate the outdoor world with a new random seed (G key) */
+  regenerateOutdoorWorld() {
+    if (this.worldMode !== 'outdoor') return;
+
+    // Increment seed for a fresh layout
+    this.mapSeed = Date.now();
+
+    // Re-seed the terrain heightmap + lake position
+    setTerrainSeed(this.mapSeed);
+
+    // Clear everything from the outdoor world group
+    clearEnvironment(this.outdoorWorld);
+
+    // Rebuild terrain mesh + water with the new heightmap
+    createTerrain(this.outdoorWorld);
+    createWater(this.outdoorWorld);
+
+    // Re-populate trees, rocks, mangos with a new seed
+    populateEnvironment(this.outdoorWorld, this.mapSeed);
+
+    // Rebuild grass (it samples getTerrainHeight at construction)
+    this.outdoorScene.remove(this.grass.mesh);
+    this.grass = new InstancedGrass(GRASS_INSTANCE_COUNT);
+    this.outdoorScene.add(this.grass.mesh);
+
+    // Re-register NPC colliders (they were wiped with the grid)
+    this.npcTurtles.reregisterColliders();
+
+    // Reset game state
     this.npcTurtles.resetScores();
     this.prevNpcScores = null;
     this.prevMangosRemaining = -1;
-    this.gameTime = 12.0; // Reset to noon
+    this.gameTime = 12.0;
     this.prevTimeMinute = -1;
-    respawnMangos();
+
+    // Re-bake the minimap terrain background
+    this.minimap.rebake();
+
+    // Reset player to spawn
+    this.player.setPosition(0, getTerrainHeight(0, 0), 0);
+
+    // Re-apply the current lighting preset so new water materials get correct colors
+    this.applyPreset(this.getTimeBasedPreset(), true);
+
+    console.log(`[Game] Map regenerated with seed ${this.mapSeed}`);
   }
 
   private createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
@@ -546,6 +593,7 @@ export class Game {
       this.outdoorSun.color.setHex(preset.sun.color);
       this.outdoorSun.intensity = preset.sun.intensity;
       this.outdoorSun.position.set(...preset.sun.position);
+      this.outdoorSun.shadow.intensity = preset.shadowIntensity;
 
       this.outdoorAmbientLight.color.setHex(preset.ambient.color);
       this.outdoorAmbientLight.intensity = preset.ambient.intensity;
@@ -576,6 +624,7 @@ export class Game {
 
     this.outdoorSun.color.lerp(tempColor.setHex(preset.sun.color), speed);
     this.outdoorSun.intensity += (preset.sun.intensity - this.outdoorSun.intensity) * speed;
+    this.outdoorSun.shadow.intensity += (preset.shadowIntensity - this.outdoorSun.shadow.intensity) * speed;
     tempPos.set(...preset.sun.position);
     this.outdoorSun.position.lerp(tempPos, speed);
 
@@ -850,10 +899,19 @@ export class Game {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (event.code === 'Digit1' || event.code === 'Digit2' || event.code === 'Digit3') {
-      this.activateOutdoorWorld();
+    if (event.code === 'Digit1') {
+      this.gameTime = 12.0; // Noon
+      this.applyPreset('1', true);
+    } else if (event.code === 'Digit2') {
+      this.gameTime = 18.0; // Afternoon
+      this.applyPreset('2', true);
+    } else if (event.code === 'Digit3') {
+      this.gameTime = 23.0; // Night
+      this.applyPreset('3', true);
     } else if (event.code === 'Digit9' && this.worldMode !== 'cave') {
       this.activateCaveWorld();
+    } else if (event.code === 'KeyG') {
+      this.regenerateOutdoorWorld();
     }
   };
 }

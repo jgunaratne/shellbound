@@ -95,22 +95,46 @@ function fbm(
   return sum / maxAmp; // normalise to roughly [-1, 1]
 }
 
+/* ─── Mutable terrain seed parameters ─────────────────────────────── */
+
+let terrainOffsetX = 73.7;
+let terrainOffsetZ = 149.3;
+export let lakeCenterX = 0;
+export let lakeCenterZ = -60;
+
+/** Re-seed the terrain to produce a completely different landscape */
+export function setTerrainSeed(seed: number) {
+  // Simple hash-based pseudo-random from the seed
+  const h = (s: number) => {
+    let v = Math.sin(s * 127.1 + 311.7) * 43758.5453123;
+    return v - Math.floor(v);
+  };
+  terrainOffsetX = h(seed) * 500;
+  terrainOffsetZ = h(seed + 1) * 500;
+
+  // Randomize lake position — keep it 40-90 units from center, avoid spawn area
+  const lakeAngle = h(seed + 2) * Math.PI * 2;
+  const lakeDist = 50 + h(seed + 3) * 40;
+  lakeCenterX = Math.cos(lakeAngle) * lakeDist;
+  lakeCenterZ = Math.sin(lakeAngle) * lakeDist;
+}
+
 /* ─── Public terrain height function ─────────────────────────────── */
 
 /** Perlin-noise terrain height. Returns a value in roughly [-8, 12]. */
 export function getTerrainHeight(x: number, z: number): number {
   const SCALE = 0.018;      // controls hill size (smaller = broader hills)
   const HEIGHT = 16;        // total peak-to-valley amplitude
-  const OFFSET_X = 73.7;    // shift so origin isn't at a grid corner
-  const OFFSET_Z = 149.3;
 
   // Primary rolling hills
   // Generate massive, natural Perlin-based rolling hills and deep valleys
-  const base = fbm(x * SCALE + OFFSET_X, z * SCALE + OFFSET_Z, 3, 2.0, 0.45);
+  const base = fbm(x * SCALE + terrainOffsetX, z * SCALE + terrainOffsetZ, 3, 2.0, 0.45);
   let rawHeight = base * HEIGHT * 0.95;
 
-  // Carve exactly ONE beautiful, dedicated mid-sized lake right in front of the player's starting view
-  const distFromSingleLake = Math.sqrt(x * x + (z + 60) * (z + 60));
+  // Carve exactly ONE beautiful, dedicated mid-sized lake
+  const dlx = x - lakeCenterX;
+  const dlz = z - lakeCenterZ;
+  const distFromSingleLake = Math.sqrt(dlx * dlx + dlz * dlz);
   const lakeBasin = 1.0 - THREE.MathUtils.smoothstep(distFromSingleLake, 10, 55);
 
   rawHeight -= lakeBasin * 8.0;
@@ -502,8 +526,6 @@ export function createWater(target: THREE.Object3D) {
   // --- 1. Large opaque ocean with a circular hole cut out for the lake ---
   const LAKE_RADIUS = 56; // must cover the full basin smoothstep(10, 55)
   const LAKE_SEGMENTS = 64;
-  const LAKE_CENTER_X = 0;
-  const LAKE_CENTER_Z = -60;
 
   // Build a large square shape for the ocean
   const oceanHalf = 1000;
@@ -518,8 +540,8 @@ export function createWater(target: THREE.Object3D) {
   const holePath = new THREE.Path();
   for (let i = 0; i <= LAKE_SEGMENTS; i++) {
     const angle = (i / LAKE_SEGMENTS) * Math.PI * 2;
-    const hx = LAKE_CENTER_X + Math.cos(angle) * LAKE_RADIUS;
-    const hy = -LAKE_CENTER_Z + Math.sin(angle) * LAKE_RADIUS; // negate Z because Shape Y is flipped
+    const hx = lakeCenterX + Math.cos(angle) * LAKE_RADIUS;
+    const hy = -lakeCenterZ + Math.sin(angle) * LAKE_RADIUS; // negate Z because Shape Y is flipped
     if (i === 0) holePath.moveTo(hx, hy);
     else holePath.lineTo(hx, hy);
   }
@@ -574,7 +596,7 @@ export function createWater(target: THREE.Object3D) {
   });
 
   const lake = new THREE.Mesh(lakeGeo, lakeMaterial);
-  lake.position.set(LAKE_CENTER_X, -1.90, LAKE_CENTER_Z);
+  lake.position.set(lakeCenterX, -1.90, lakeCenterZ);
   lake.renderOrder = 1; // render after terrain so alpha blending works
   lake.name = 'lake';
   target.add(lake);
