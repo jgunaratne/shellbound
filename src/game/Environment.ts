@@ -22,6 +22,26 @@ const COLLIDER_CELL_SIZE = 12;
 export const colliders: Collider[] = [];
 const colliderGrid = new Map<string, Set<IndexedCollider>>();
 
+/** Remove all environment objects from the target and reset colliders/mangos */
+export function clearEnvironment(target: THREE.Object3D) {
+  // Remove all children (terrain, water, trees, rocks, mangos — everything)
+  while (target.children.length > 0) {
+    target.remove(target.children[0]);
+  }
+
+  // Clear spatial collider data (NPC colliders will re-register themselves)
+  colliders.length = 0;
+  colliderGrid.clear();
+
+  // Clear mangos
+  for (const m of mangos) {
+    if (m.parent) m.parent.remove(m);
+  }
+  mangos.length = 0;
+  cachedBaseMango = null;
+  cachedTarget = null;
+}
+
 function getColliderCell(value: number): number {
   return Math.floor(value / COLLIDER_CELL_SIZE);
 }
@@ -113,9 +133,9 @@ function createSeededRandom(seed: number) {
   };
 }
 
-export function populateEnvironment(target: THREE.Object3D) {
+export function populateEnvironment(target: THREE.Object3D, seed = 42, mangoCount = MANGO_COUNT) {
   mangos.length = 0; // Reset on remount / HMR
-  const random = createSeededRandom(42);
+  const random = createSeededRandom(seed);
   const loader = new GLTFLoader();
 
   const dracoLoader = new DRACOLoader();
@@ -161,7 +181,7 @@ export function populateEnvironment(target: THREE.Object3D) {
       mangos.length = 0; // Clear exactly before scattering to defeat any duplicate async race conditions
       cachedBaseMango = baseMango;
       cachedTarget = target;
-      scatterMangos(target, baseMango, random);
+      scatterMangos(target, baseMango, random, mangoCount);
 
       console.log('Trees, rocks, and mangos loaded and scattered');
     })
@@ -284,40 +304,64 @@ function scatterMangos(
   target: THREE.Object3D,
   baseMango: THREE.Object3D,
   random: () => number,
+  count = MANGO_COUNT,
 ) {
   const PLAYER_R = 2.0; // must match Player's PLAYER_RADIUS
-  for (let i = 0; i < MANGO_COUNT; i++) {
-    const x = randomWorldCoordinate(random);
-    const z = randomWorldCoordinate(random);
+  const COLLIDER_CLEARANCE = 3.0; // extra buffer so turtles can reach the mango
+  const WATER_MARGIN = 3.0; // keep mangos away from water edges
+  const MAX_RETRIES = 20;
 
-    const terrainY = getTerrainHeight(x, z);
-    if (terrainY < WATER_LEVEL) {
-      continue;
-    }
+  let placed = 0;
+  for (let i = 0; i < count; i++) {
+    let success = false;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      const x = randomWorldCoordinate(random);
+      const z = randomWorldCoordinate(random);
 
-    // Skip positions inside or too close to tree/rock colliders — the player's
-    // collision resolution would push them away before the pickup check runs.
-    const nearby = queryNearbyColliders(x, z, PLAYER_R + 4);
-    let blocked = false;
-    for (const c of nearby) {
-      if (Math.hypot(x - c.x, z - c.z) < c.radius + PLAYER_R + 1.0) {
-        blocked = true;
-        break;
+      const terrainY = getTerrainHeight(x, z);
+      if (terrainY < WATER_LEVEL + WATER_MARGIN) {
+        continue; // too close to water level — turtles avoid water
       }
+
+      // Also check that surrounding terrain is above water (not on a peninsula tip)
+      const checkDist = 4;
+      const surroundingDry =
+        getTerrainHeight(x + checkDist, z) > WATER_LEVEL &&
+        getTerrainHeight(x - checkDist, z) > WATER_LEVEL &&
+        getTerrainHeight(x, z + checkDist) > WATER_LEVEL &&
+        getTerrainHeight(x, z - checkDist) > WATER_LEVEL;
+      if (!surroundingDry) continue;
+
+      // Skip positions inside or too close to tree/rock colliders
+      const nearby = queryNearbyColliders(x, z, PLAYER_R + COLLIDER_CLEARANCE + 2);
+      let blocked = false;
+      for (const c of nearby) {
+        if (Math.hypot(x - c.x, z - c.z) < c.radius + PLAYER_R + COLLIDER_CLEARANCE) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+
+      const mango = baseMango.clone() as MangoObject;
+      const scale = 0.3 + random() * 0.3;
+      mango.position.set(x, terrainY + 0.3, z);
+      mango.scale.setScalar(scale);
+      mango.rotation.y = random() * Math.PI * 2;
+      mango.rotation.x = (random() - 0.5) * 0.5;
+      mango.rotation.z = (random() - 0.5) * 0.5;
+
+      target.add(mango);
+      mangos.push(mango);
+      placed++;
+      success = true;
+      break;
     }
-    if (blocked) continue;
-
-    const mango = baseMango.clone() as MangoObject;
-    const scale = 0.3 + random() * 0.3;
-    mango.position.set(x, terrainY + 0.3, z);
-    mango.scale.setScalar(scale);
-    mango.rotation.y = random() * Math.PI * 2;
-    mango.rotation.x = (random() - 0.5) * 0.5;
-    mango.rotation.z = (random() - 0.5) * 0.5;
-
-    target.add(mango);
-    mangos.push(mango);
+    if (!success) {
+      // Exhausted retries — skip this mango
+    }
   }
+  console.log(`[Environment] Placed ${placed}/${count} mangos`);
 }
 
 function randomWorldCoordinate(random: () => number): number {
